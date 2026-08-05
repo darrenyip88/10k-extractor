@@ -1,0 +1,20 @@
+{
+  "ticker": "KO",
+  "company": "COCA COLA CO",
+  "cik": 21344,
+  "sic": "2080",
+  "sic_description": "Beverages",
+  "state_of_incorporation": "DE",
+  "fiscal_year_end": "1231",
+  "exchanges": [
+    "NYSE"
+  ],
+  "period": "2025-12-31",
+  "filed": "2026-02-20",
+  "accession": "0001628280-26-010047",
+  "source_url": "https://www.sec.gov/Archives/edgar/data/21344/000162828026010047/ko-20251231.htm",
+  "extracted_at": "2026-08-04T12:50:36",
+  "auditor_name": "Ernst & Young LLP",
+  "auditor_location": "Atlanta, Georgia",
+  "auditor_firm_id": "42"
+}

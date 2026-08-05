@@ -1,0 +1,54 @@
+# Risk factors — 50 headlines
+
+_Full text: sections/item1a_risk_factors.md_
+
+- Patents, Copyrights, Trade Secrets and Trademarks
+- RISKS RELATED TO OUR OPERATIONS
+- Unfavorable general economic and geopolitical conditions could negatively impact our financial results.
+- Increased competition could hurt our business.
+- If we are not successful in our innovation activities, our financial results may be negatively affected.
+- Changes in the retail landscape or the loss of key customers could adversely affect our financial results.
+- If we are unable to expand our business in emerging and developing markets, our growth could be negatively affected.
+- If we do not successfully manage the potential negative consequences of our productivity initiatives, our business operations could be adversely affected.
+- If we are unable to attract, retain and inspire outstanding talent, our business could be negatively affected.
+- Disruption of our supply chain, including increased commodity, raw material, packaging, energy, transportation and other input costs, may adversely affect our financial condition or results of operations.
+- If we do not successfully integrate and manage our acquired businesses, brands or bottling operations, or if we are unable to realize a significant portion of the anticipated benefits of our joint ventures or strategic relationships, our financial results could suffer.
+- If our third-party service providers and business partners do not satisfactorily fulfill their commitments and responsibilities, or experience adverse events, our business could suffer.
+- If we are unable to renew collective bargaining agreements on satisfactory terms, or if we or our bottling partners experience strikes, work stoppages or labor unrest, our business could suffer.
+- RISKS RELATED TO CONSUMER DEMAND FOR OUR PRODUCTS
+- Obesity and other health-related concerns may reduce demand for some of our products.
+- If we do not address evolving consumer product and shopping preferences, our business could suffer.
+- Product safety and quality concerns could negatively affect our business.
+- Public debate and concern about perceived negative health consequences of processing and of certain ingredients, such as nutritive and non-nutritive sweeteners, color additives and biotechnology-derived substances, and of other substances present in our beverage products or packaging materials, may reduce demand for our beverage products or result in additional governmental regulation.
+- If we are not successful in our efforts to digitalize the Coca-Cola system, our financial results could be negatively affected.
+- If negative publicity, whether or not warranted, concerning product safety or quality, workplace and human rights, obesity or other issues damages our brand image, corporate reputation and social license to operate, our business may suffer.
+- If we are unable to successfully manage new product launches, our business and financial results could be adversely affected.
+- RISKS RELATED TO THE COCA-COLA SYSTEM
+- We rely on our bottling partners for a significant portion of our business. If we are unable to maintain good relationships with our bottling partners, our business could suffer.
+- If our bottling partners’ financial condition deteriorates, our business and financial results could be affected.
+- We may from time to time engage in refranchising activities or divestitures of certain brands or businesses, which could adversely affect our business and results of operations.
+- RISKS RELATED TO REGULATORY AND LEGAL MATTERS
+- Increases in income tax rates, changes in income tax laws or regulations, or unfavorable resolutions of tax matters could have a material adverse impact on our financial results.
+- Increased or new indirect taxes could negatively affect our business.
+- Changes in laws and regulations relating to beverage containers and packaging could increase our costs and reduce demand for our products.
+- Significant additional labeling or warning requirements or limitations on the marketing or sale of our products may inhibit sales of affected products.
+- Litigation claims or legal proceedings could expose us to significant liabilities and damage our reputation.
+- We conduct business in markets with high-risk legal compliance environments, which exposes us to increased legal and reputational risk.
+- Failure to adequately protect, or disputes relating to, trademarks, formulas and other intellectual property rights could harm our business.
+- Changes in, or failure to comply with, the laws and regulations applicable to our products or our business operations could increase our costs or reduce our net operating revenues.
+- RISKS RELATED TO FINANCE, ACCOUNTING AND INVESTMENTS
+- Fluctuations in foreign currency exchange rates could have a material adverse effect on our financial results.
+- If interest rates increase, our net income could be negatively affected.
+- If we are unable to achieve our overall long-term growth objectives, the value of an investment in our Company could be negatively affected.
+- Default by or failure of one or more of our counterparty financial institutions could cause us to incur significant losses.
+- We may be required to recognize impairment charges that could materially affect our financial results.
+- RISKS RELATED TO CYBERSECURITY AND DATA PRIVACY
+- If we are unable to protect our information systems against service interruption, misappropriation of data or cybersecurity incidents, our operations could be disrupted, we may suffer financial losses and our reputation may be damaged.
+- If we fail to comply with privacy and data protection laws, we could be subject to adverse publicity, business disruption, data loss, government enforcement actions and/or private litigation, any of which could negatively affect our business and operating results.
+- RISKS RELATED TO ENVIRONMENTAL AND SOCIAL FACTORS
+- Our business is subject to evolving sustainability regulatory requirements and expectations, which exposes us to increased costs and legal and reputational risks.
+- Increasing concerns about the environmental impact of plastic bottles and other packaging materials could result in reduced demand for our beverage products and increased production and distribution costs.
+- Water scarcity and poor quality could negatively impact the Coca-Cola system’s costs and capacity.
+- Increased demand for food products, decreased agricultural productivity and increased regulation of ingredient sourcing due diligence may negatively affect our business.
+- Climate change and legal or regulatory responses thereto may have a long-term adverse impact on our business and results of operations.
+- Adverse weather conditions could reduce the demand for our products.

@@ -1,0 +1,693 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>10K AI — the 10-K, taken apart</title>
+<meta name="description" content="Give it a ticker, get the 10-K and everything useful inside it. Every Item as its own file, the as-filed statements, ten years of financials, and a diff of this year's risks against last year's. All from SEC EDGAR.">
+
+<style>
+/* ---- faces ------------------------------------------------------------- */
+@font-face{font-family:"Libre Caslon Display";src:url("assets/fonts/libre-caslon-display.woff2") format("woff2");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Libre Franklin";src:url("assets/fonts/libre-franklin.woff2") format("woff2");font-weight:300 700;font-style:normal;font-display:swap}
+
+:root{
+  --ink:#141414;
+  --paper:#fff;
+  --quiet:#5a5a5a;
+  --hair:rgba(20,20,20,.22);
+  --gutter:8px;
+  --serif:"Libre Caslon Display","Baskerville","Times New Roman",serif;
+  --sans:"Libre Franklin",-apple-system,"Helvetica Neue",Arial,sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;padding:0;
+  background:#1d1710;color:var(--ink);
+  font-family:var(--sans);
+  font-synthesis-weight:none;
+  -webkit-font-smoothing:antialiased;
+}
+/* the landing: white paper, edge to edge, the plate and the ticker box on it */
+.landing{
+  background:var(--paper);
+  padding:var(--gutter) var(--gutter) clamp(2.5rem,6vh,4rem);
+}
+
+/* The ground: an 1844 painting of Paestum rebuilt as a colour ASCII mosaic,
+   printed at a low key so cream type sits straight on it with no scrim.
+   Everything past the landing sits on it — one continuous image scaled to the
+   whole block, never tiled, so there is no seam to see. Flipping the three ink
+   variables inverts the entire lower page, rules and all, without restating a
+   single component rule. */
+.ground{
+  --ink:#efe7d8;
+  --quiet:#d8cfbd;      /* the plate's ceiling is tuned to this: 4.7:1 */
+  --hair:rgba(239,231,216,.24);
+  --dissolve:clamp(110px,16vh,190px);
+  position:relative;isolation:isolate;
+  color:var(--ink);
+  padding:var(--dissolve) 0 clamp(2rem,5vh,3rem);
+  background:#1d1710 url("assets/bg-mosaic.png") center center / cover no-repeat;
+}
+/* The mosaic comes up out of the paper. A hairline between the two materials
+   read as two pages taped together; over this distance the eye never finds the
+   join. Negative z-index paints it over the ground's own background and under
+   its type, and --dissolve is also the ground's top padding, so no line of
+   cream ever lands where the plate is still light. */
+.ground::before{
+  content:"";position:absolute;left:0;right:0;top:0;z-index:-1;
+  height:var(--dissolve);pointer-events:none;
+  /* eased, not linear: a straight ramp spends its whole length near 50% and
+     prints as a flat band of grey. These stops hold the paper, then let go. */
+  background:linear-gradient(to bottom,
+    #fff 0%, rgba(255,255,255,.94) 18%, rgba(255,255,255,.78) 36%,
+    rgba(255,255,255,.5) 56%, rgba(255,255,255,.22) 76%, rgba(255,255,255,0) 100%);
+}
+.ground .band:first-of-type{padding-top:clamp(2rem,5vh,3.5rem)}
+.ground .files a:hover{background:rgba(239,231,216,.08)}
+.ground .metric .none{color:rgba(239,231,216,.45)}
+.ground .close a,.ground .filing__head .src a{border-bottom-color:rgba(239,231,216,.4)}
+.ground ::selection{background:var(--ink);color:#1d1710}
+img{display:block;max-width:100%}
+a{color:inherit}
+::selection{background:var(--ink);color:var(--paper)}
+:focus-visible{outline:1.5px solid var(--ink);outline-offset:3px}
+
+/* ---- the plate --------------------------------------------------------- */
+.plate{
+  position:relative;margin:0;
+  width:100%;height:min(82svh,max(58svh,calc((100vw - 2*var(--gutter))/1.5)));
+  overflow:hidden;
+}
+/* The plate dissolves into the paper it is printed on, and that single mask
+   replaced the whole blur rig: three stacked copies at blur 4/11/24 with the
+   lower third darkened so white type could sit on it. The fog was what read as
+   artificial. An engraving doesn't end in a black cloud, it ends where the ink
+   runs out, and a stipple plate thins into paper on its own if you let it — so
+   there is no blur here at all now, and no edge either, because the image stops
+   being an image before the paper below it begins.
+
+   The ramp finishes above the headline rather than behind it. Measured against
+   the type's own box, ink over the old blurred foreground was 1.23:1; on the
+   paper it is 18:1. */
+.plate>img{
+  position:absolute;inset:0;width:100%;height:100%;
+  object-fit:cover;object-position:50% 42%;
+  filter:grayscale(1) contrast(1.06);
+  -webkit-mask-image:linear-gradient(to bottom,#000 40%,transparent 66%);
+          mask-image:linear-gradient(to bottom,#000 40%,transparent 66%);
+}
+
+.plate__type{
+  position:absolute;left:0;right:0;bottom:clamp(1rem,2.5vh,2rem);
+  text-align:center;padding:0 clamp(1rem,4vw,2rem);
+}
+.plate__type h1{
+  margin:0;font-family:var(--serif);font-weight:400;
+  font-size:clamp(1.65rem,6.8vw,5.35rem);
+  line-height:1.0;letter-spacing:.005em;
+  color:var(--ink);white-space:nowrap;
+}
+.plate__type p{
+  margin:clamp(1rem,2.2vh,1.5rem) auto 0;max-width:42ch;
+  font-size:clamp(.85rem,1.05vw,1rem);font-weight:400;
+  line-height:1.55;color:var(--quiet);
+}
+/* printer's rule under the headline, heavy over hairline */
+.plate__type h1::after{
+  content:"";display:block;width:min(9rem,38vw);height:0;margin:clamp(.9rem,2vh,1.3rem) auto 0;
+  border-top:2px solid var(--ink);border-bottom:1px solid var(--hair);
+  padding-bottom:6px;
+}
+
+/* ---- the button -------------------------------------------------------- */
+.pill{
+  display:inline-flex;align-items:center;gap:.6em;
+  font-family:var(--serif);font-weight:400;
+  font-size:.9375rem;letter-spacing:.015em;
+  padding:.75em 1.55em;border-radius:999px;
+  text-decoration:none;border:1px solid var(--ink);
+  transition:background-color .22s cubic-bezier(.22,1,.36,1),color .22s cubic-bezier(.22,1,.36,1);
+}
+.pill--solid{background:var(--ink);color:#fff}
+.pill--solid:hover{background:#000}
+.pill svg{width:.95em;height:.95em;flex:none}
+button.pill{cursor:pointer;-webkit-appearance:none;appearance:none;line-height:1.2}
+.pill__label{display:inline-block;text-align:center}
+.cmd{text-align:center;margin:.55rem 0 0;font-size:.75rem;color:var(--quiet)}
+.cmd code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+
+/* ---- the console: ticker in, filing out -------------------------------- */
+.console{
+  max-width:34rem;margin:clamp(1.6rem,4vh,2.6rem) auto 0;
+  padding:0 clamp(1rem,4vw,2rem);text-align:center;
+}
+.console__label{
+  display:block;font-family:var(--sans);font-weight:600;
+  font-size:.6875rem;letter-spacing:.22em;text-transform:uppercase;
+  color:var(--ink);margin-bottom:.9rem;
+}
+.console__row{display:flex;gap:.5rem;justify-content:center;flex-wrap:wrap}
+.console input{
+  flex:1 1 12rem;min-width:0;max-width:16rem;
+  font-family:var(--serif);font-size:1.0625rem;letter-spacing:.06em;
+  text-align:center;text-transform:uppercase;
+  color:var(--ink);background:var(--paper);
+  border:1px solid var(--ink);border-radius:999px;
+  padding:.7em 1.2em;
+}
+.console input::placeholder{color:#9a9a9a;letter-spacing:.04em;text-transform:none}
+.console input:disabled{opacity:.5}
+.console__hint{
+  margin:.85rem 0 0;font-size:.75rem;line-height:1.5;color:var(--quiet);
+}
+.console__hint button{
+  font:inherit;color:var(--ink);background:none;border:0;padding:0 .1em;
+  cursor:pointer;border-bottom:1px solid rgba(20,20,20,.35);
+}
+.console__hint button:hover{border-bottom-color:var(--ink)}
+
+.status{
+  max-width:34rem;margin:1.4rem auto 0;padding:0 clamp(1rem,4vw,2rem);
+  text-align:center;font-size:.8125rem;line-height:1.6;color:var(--quiet);
+}
+.status[data-tone="error"]{color:#8a1b1b}
+.status .tick{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+
+/* ---- the filing, set as a printed report ------------------------------- */
+.filing{max-width:58rem;margin:clamp(3rem,7vh,5rem) auto 0;padding:0 clamp(1rem,4vw,2rem)}
+.filing[hidden]{display:none}
+.filing__head{text-align:center;margin-bottom:1.6rem}
+.filing__head h2{
+  margin:0 0 .4rem;font-family:var(--serif);font-weight:400;
+  font-size:clamp(1.4rem,3vw,2.1rem);line-height:1.15;
+}
+.filing__head .sub{
+  margin:0;font-size:.75rem;letter-spacing:.14em;text-transform:uppercase;color:var(--quiet);
+}
+.filing__head .src{margin:.6rem 0 0;font-size:.75rem;color:var(--quiet)}
+.filing__head .src a{color:var(--ink)}
+
+/* fixed tracks, not auto-fit: eight metrics must land on full rows or the
+   hairlines end mid-air where the empty cells would be */
+.metrics{
+  display:grid;grid-template-columns:repeat(2,1fr);
+  gap:0;margin-top:1.4rem;border-top:1px solid var(--hair);
+}
+@media (min-width:560px){.metrics{grid-template-columns:repeat(4,1fr)}}
+.metric{padding:.9rem .4rem;border-bottom:1px solid var(--hair);text-align:center}
+.metric dt{
+  font-size:.625rem;letter-spacing:.14em;text-transform:uppercase;color:var(--quiet);
+  margin-bottom:.3rem;
+}
+.metric dd{
+  margin:0;font-family:var(--serif);font-size:1.25rem;line-height:1.1;color:var(--ink);
+}
+.metric .delta{font-family:var(--sans);font-size:.6875rem;color:var(--quiet);display:block;margin-top:.25rem}
+.metric .none{color:#9a9a9a}
+
+.filing h3{
+  margin:2.2rem 0 .2rem;font-family:var(--sans);font-weight:600;
+  font-size:.6875rem;letter-spacing:.2em;text-transform:uppercase;text-align:center;
+}
+.ftable{width:100%;border-collapse:collapse;font-size:.8125rem;margin-top:1rem}
+.ftable th,.ftable td{padding:.5rem .4rem;border-bottom:1px solid var(--hair);text-align:right}
+.ftable th:first-child,.ftable td:first-child{text-align:left}
+.ftable th{
+  font-family:var(--sans);font-weight:600;font-size:.625rem;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--quiet);
+}
+.ftable td{font-variant-numeric:tabular-nums}
+.ftable tbody tr:last-child td{border-bottom:none;font-weight:600}
+
+.risk{margin-top:1rem;font-size:.875rem;line-height:1.6;color:var(--ink)}
+.risk .tally{text-align:center;color:var(--quiet);font-size:.8125rem}
+.risk ul{margin:.9rem 0 0;padding:0;list-style:none}
+.risk li{
+  padding:.7rem 0;border-bottom:1px solid var(--hair);
+  font-family:var(--serif);font-size:1rem;line-height:1.45;
+}
+.risk li:last-child{border-bottom:none}
+
+/* ---- the reading room: the four Items worth opening -------------------- */
+.read{margin-top:1rem}
+.read details{border-bottom:1px solid var(--hair)}
+.read details:last-child{border-bottom:none}
+.read summary{
+  cursor:pointer;list-style:none;
+  display:grid;grid-template-columns:1fr auto;gap:.15rem 1rem;align-items:baseline;
+  padding:.95rem 0;
+}
+.read summary::-webkit-details-marker{display:none}
+.read .no{
+  grid-column:1/-1;font-family:var(--sans);font-weight:600;font-size:.625rem;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--quiet);
+}
+.read .title{font-family:var(--serif);font-size:1.125rem;line-height:1.25}
+.read .kb{
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:.75rem;color:var(--quiet);white-space:nowrap;
+}
+.read .sign::before{content:"+";margin-left:.5em}
+.read details[open] .sign::before{content:"–"}
+.read .why{
+  grid-column:1/-1;margin:.3rem 0 0;max-width:62ch;
+  font-size:.8125rem;line-height:1.55;color:var(--quiet);
+}
+/* the section itself: full text, scrolled in place so the page keeps its shape */
+.read .body{
+  margin:0 0 1.3rem;max-height:26rem;overflow:auto;
+  padding-top:.9rem;border-top:1px solid var(--hair);
+  font-family:var(--serif);font-size:.9375rem;line-height:1.62;
+  white-space:pre-wrap;overflow-wrap:anywhere;
+}
+
+/* paths like statements/consolidated_balance_sheets_parenthetical.json are
+   longer than any sensible column, so the name wraps and the size stays put */
+.files{
+  margin-top:1rem;display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(21rem,1fr));gap:0 1.75rem;
+}
+.files a{
+  display:flex;justify-content:space-between;gap:1rem;align-items:baseline;
+  padding:.45rem 0;border-bottom:1px solid var(--hair);
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:.75rem;color:var(--ink);text-decoration:none;
+}
+.files a:hover{background:rgba(20,20,20,.04)}
+.files .name{min-width:0;overflow-wrap:anywhere}
+.files .kb{color:var(--quiet);flex:none;white-space:nowrap}
+.runstat{
+  margin:1.6rem 0 0;text-align:center;font-size:.75rem;color:var(--quiet);
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+
+/* ---- broadside bands --------------------------------------------------- */
+.band{max-width:58rem;margin:0 auto;padding:clamp(4rem,10vh,7rem) clamp(1rem,4vw,2rem) 0}
+.band>h2{
+  margin:0 0 clamp(2rem,4.5vh,3rem);
+  font-family:var(--sans);font-weight:600;
+  font-size:.6875rem;letter-spacing:.22em;text-transform:uppercase;
+  text-align:center;color:var(--ink);
+}
+/* double rule: the letterpress divider, heavy over hairline.
+   A background gradient, not ::after — generated content on <hr> silently
+   fails to paint in this engine despite computing a non-none value. */
+.rule{
+  border:0;margin:0;height:9px;
+  background:linear-gradient(to bottom,var(--ink) 2px,transparent 2px,transparent 8px,var(--ink) 9px);
+}
+
+/* work set as catalogue entries: year rail, entry body */
+.catalogue{margin-top:1.6rem}
+.item{
+  display:grid;grid-template-columns:1fr;gap:.4rem;
+  padding:clamp(1.4rem,3vh,2rem) 0;border-bottom:1px solid var(--hair);
+}
+.item:last-child{border-bottom:none}
+.item .year{
+  font-family:var(--sans);font-size:.6875rem;font-weight:600;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--quiet);
+  order:2;
+}
+.item h3{
+  order:1;
+  margin:0;font-family:var(--serif);font-weight:400;
+  font-size:clamp(1.2rem,2.3vw,1.7rem);line-height:1.16;
+}
+.item p{order:3;margin:0;font-size:.9375rem;line-height:1.6;color:var(--quiet);max-width:58ch}
+@media (min-width:760px){
+  .item{grid-template-columns:8rem 1fr;column-gap:clamp(1.2rem,3vw,2.5rem)}
+  .item .year{grid-row:1/4;grid-column:1;padding-top:.5rem}
+  .item h3,.item p{grid-column:2}
+}
+
+/* approach: a printed statement, narrow measure, centred */
+.statement{max-width:34rem;margin:1.6rem auto 0;text-align:center}
+.statement>div+div{margin-top:clamp(1.8rem,4vh,2.6rem)}
+.statement h3{
+  margin:0 0 .55rem;font-family:var(--sans);font-weight:600;
+  font-size:.6875rem;letter-spacing:.18em;text-transform:uppercase;color:var(--ink);
+}
+.statement p{
+  margin:0;font-family:var(--serif);font-weight:400;
+  font-size:clamp(1rem,1.5vw,1.1875rem);line-height:1.55;color:var(--ink);
+}
+
+/* ---- close: the colophon ---------------------------------------------- */
+.close{
+  max-width:58rem;margin:clamp(4rem,10vh,7rem) auto 0;
+  padding:1.5rem clamp(1rem,4vw,2rem) clamp(2rem,5vh,3rem);
+  text-align:center;font-size:.8125rem;color:var(--quiet);
+}
+.close strong{
+  display:block;font-family:var(--serif);font-weight:400;font-size:1.125rem;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--ink);margin-bottom:.5rem;
+}
+.close a{text-decoration:none;border-bottom:1px solid rgba(20,20,20,.3);padding-bottom:1px}
+.close a:hover{border-bottom-color:var(--ink)}
+
+/* ---- one authored moment ---------------------------------------------- */
+@keyframes settle{from{opacity:0;filter:blur(10px);transform:translateY(10px)}to{opacity:1;filter:blur(0);transform:none}}
+.plate__type h1,.plate__type p{animation:settle 1.1s cubic-bezier(.16,1,.3,1) both}
+.plate__type p{animation-delay:.14s}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition-duration:.01ms!important}}
+</style>
+</head>
+<body>
+<!--
+THESIS: The page is a letterpress broadside — the plate on top, the text set
+  below on a narrow measure between double rules; it refuses the card grid and
+  the section-heading-plus-paragraph slab.
+OWN-WORLD: Pure white, Libre Caslon Display for everything that speaks, Libre
+  Franklin only for tracked uppercase labels, double rules (2px over 1px) as
+  the sole ornament, centred axis, no fills, no shadows, no colour.
+STORY: Visitor learns in one line that a ticker becomes a dismantled
+  10-K, sees exactly which files land, and copies the command.
+FIRST VIEWPORT: 3:2 engraving to 82svh, its lower third dissolving into the
+  paper; centred Caslon headline in ink below that dissolve with a printer's
+  rule beneath; subtitle under that; the ticker box on white.
+JOINS: nothing on this page ends at a cut edge. The plate fades into the paper,
+  the paper fades into the mosaic ground.
+FORM: Letterpress broadside. Brief-pinned by the user (monochrome, engraved,
+  serif system) — direction not rolled.
+FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
+-->
+
+<main>
+<div class="landing">
+  <figure class="plate">
+    <img src="assets/hero.jpg" alt="Stipple engraving of the Acropolis of Athens: the temple on the rock left of centre, ancient rooftops and a theatre in the foreground, bare mountains and a bay across the horizon.">
+    
+    <div class="plate__type">
+      <h1>The 10-K, taken apart</h1>
+      <p>Give it a ticker. Get every Item as its own file, the as-filed statements, ten years of financials, and a diff of this year's risks against last year's.</p>
+    </div>
+  </figure>
+
+  <form class="console" id="run-form" autocomplete="off">
+    <label class="console__label" for="ticker">Enter a ticker</label>
+    <div class="console__row">
+      <input id="ticker" name="ticker" type="text" placeholder="AAPL"
+             maxlength="10" spellcheck="false" autocapitalize="characters" required>
+      <button class="pill pill--solid" type="submit" id="run-btn">
+        <span class="pill__label">Pull the 10-K</span>
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M2 8h11M9 4l4 4-4 4"/>
+        </svg>
+      </button>
+    </div>
+    <p class="console__hint">
+      Straight from SEC EDGAR. Try
+      <button type="button" data-fill="AAPL">AAPL</button>,
+      <button type="button" data-fill="NVDA">NVDA</button>,
+      <button type="button" data-fill="JPM">JPM</button> or
+      <button type="button" data-fill="BRK.B">BRK.B</button>.
+    </p>
+    <p class="cmd">Or from the terminal: <code>./run_10k.sh AAPL</code></p>
+  </form>
+
+  <p class="status" id="status" role="status" aria-live="polite"></p>
+</div><!-- /.landing -->
+
+<div class="ground">
+  <section class="filing" id="filing" hidden aria-live="polite"></section>
+
+  <section class="band" id="output">
+    <h2>What lands in the folder</h2>
+    <hr class="rule">
+    <div class="catalogue">
+      <article class="item">
+        <h3>The one file to open first</h3>
+        <span class="year">SUMMARY.md</span>
+        <p>Company identifiers, the latest year's numbers, revenue and EPS history, the risk-diff headline, and an index of everything else.</p>
+      </article>
+      <article class="item">
+        <h3>All ten Items, split out</h3>
+        <span class="year">sections/</span>
+        <p>Business, risk factors, MD&amp;A, legal proceedings, market risk, financial statements — each one its own file, so you read the section instead of the whole document.</p>
+      </article>
+      <article class="item">
+        <h3>The statements, as filed</h3>
+        <span class="year">statements/</span>
+        <p>Income statement, balance sheet, cash flow and equity, taken from the filing itself rather than a vendor's normalisation. Markdown and JSON.</p>
+      </article>
+      <article class="item">
+        <h3>Ten years, with the sourcing shown</h3>
+        <span class="year">trends.md</span>
+        <p>Margins, free cash flow, ROE, CAGR and share count across a decade — plus a note on which XBRL concepts fed each row and which were tried and not found.</p>
+      </article>
+      <article class="item">
+        <h3>What changed in the risks</h3>
+        <span class="year">risk_diff.md</span>
+        <p>Risks added, removed and reworded against last year. Every added risk prints beside its closest dropped counterpart with a similarity score, and a wholesale rewrite gets flagged at the top.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="band" id="approach">
+    <h2>How it works</h2>
+    <hr class="rule">
+    <div class="statement">
+      <div>
+        <h3>No key, no quota, no cost</h3>
+        <p>Everything comes from SEC EDGAR. A full extraction is about twelve requests and fifteen seconds cold, then instant — filings are immutable once accepted, so the cache never expires.</p>
+      </div>
+      <div>
+        <h3>No model touches the filing</h3>
+        <p>The tool extracts and structures, nothing else. Reading is yours to do, or your agent's, with the source text sitting right there to check against.</p>
+      </div>
+      <div>
+        <h3>Missing stays missing</h3>
+        <p>Banks have no gross profit line. Berkshire doesn't tag diluted EPS undimensioned. A blank stays blank and the file says what was tried, rather than quietly substituting something close.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer class="close">
+    <strong>10K AI</strong>
+    <span>Data from SEC EDGAR. Extraction only — not investment advice.</span>
+  </footer>
+</div><!-- /.ground -->
+</main>
+
+<script>
+(function(){
+  const form   = document.getElementById('run-form');
+  const input  = document.getElementById('ticker');
+  const btn    = document.getElementById('run-btn');
+  const label  = btn.querySelector('.pill__label');
+  const status = document.getElementById('status');
+  const out    = document.getElementById('filing');
+
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  // A tagged value the company never reported stays blank. Never substitute
+  // something close — that is the whole promise of the tool.
+  const none = '<span class="none">—</span>';
+  const num  = (v, dp) => v == null ? none
+    : Number(v).toLocaleString('en-US', {minimumFractionDigits: dp||0, maximumFractionDigits: dp||0});
+  const pct  = v => v == null ? none : (v > 0 ? '+' : '') + v.toFixed(1) + '%';
+  const usdM = v => v == null ? none : '$' + num(v, 0) + 'M';
+
+  // The four Items that carry the story the numbers can't. Everything else the
+  // extractor writes stays one click away in the file list below.
+  const READING = [
+    ['sections/item1_business.md', 'Item 1', 'Business',
+     'What the company actually does — products, customers, segments, competition. Start here if the company is new to you. Answers “how does this thing make money?”'],
+    ['sections/item1a_risk_factors.md', 'Item 1A', 'Risk Factors',
+     'Everything that could go wrong, in the company’s own words. Much is boilerplate, but the first few risks and anything company-specific are worth reading. New risks added since last year are a tell — see the diff above.'],
+    ['sections/item7_mdna.md', 'Item 7', 'Management’s Discussion &amp; Analysis',
+     'Management explains the results in plain English — why revenue moved, what drove margins, what they expect. The most information-dense narrative in the filing. Read it closely.'],
+    ['sections/item8_financial_statements.md', 'Item 8', 'Financial Statements &amp; Notes',
+     'The audited income statement, balance sheet and cash flow statement, plus the footnotes — where the real detail hides: debt maturities, segment breakdowns, revenue recognition policy, useful lives behind depreciation and amortisation, leases, pensions, stock-based comp.'],
+  ];
+
+  function reading(d){
+    const by = {};
+    (d.files || []).forEach(f => { by[f.name] = f; });
+    const blocks = READING.map(([name, no, title, why]) => {
+      const f = by[name];
+      if (!f) return '';   // a filer that didn't file this Item gets no empty drawer
+      // NVIDIA and JPMorgan answer Item 8 with one sentence pointing at Part IV.
+      // The section is honestly that short; the tables are in statements/.
+      const stub = f.kb < 2
+        ? ' <em>This filer cross-references the statements rather than restating them here — the tables are in statements/ below.</em>'
+        : '';
+      return '<details><summary>' +
+        '<span class="no">' + no + '</span>' +
+        '<span class="title">' + title + '</span>' +
+        '<span class="kb">' + f.kb + ' KB<span class="sign"></span></span>' +
+        '<span class="why">' + why + stub + '</span>' +
+        '</summary><pre class="body" data-src="' + esc(f.href) + '">Loading…</pre></details>';
+    }).join('');
+    return blocks ? '<h3>The four sections worth reading</h3><div class="read">' + blocks + '</div>' : '';
+  }
+
+  // fetched on first open, not on render: Item 8 alone runs to 200 KB and most
+  // visits never open it
+  function wireReading(){
+    out.querySelectorAll('.read details').forEach(dt => {
+      dt.addEventListener('toggle', async () => {
+        const pre = dt.querySelector('.body');
+        if (!dt.open || pre.dataset.loaded) return;
+        pre.dataset.loaded = '1';
+        try {
+          const r = await fetch(pre.dataset.src);
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          pre.textContent = await r.text();
+        } catch (err) {
+          pre.dataset.loaded = '';
+          pre.textContent = 'Could not load this section — it is still on disk at '
+            + pre.dataset.src;
+        }
+      });
+    });
+  }
+
+  function metric(term, value, delta){
+    return '<div class="metric"><dt>' + esc(term) + '</dt><dd>' + value +
+      (delta ? '<span class="delta">' + delta + '</span>' : '') + '</dd></div>';
+  }
+
+  function render(d){
+    const L = d.latest, parts = [];
+
+    parts.push(
+      '<div class="filing__head">' +
+        '<h2>' + esc(d.company || d.ticker) + '</h2>' +
+        '<p class="sub">' + esc(d.ticker) + ' · FY ended ' + esc(d.period) +
+          ' · filed ' + esc(d.filed) + (d.sic ? ' · ' + esc(d.sic) : '') + '</p>' +
+        '<p class="src">CIK ' + esc(d.cik) + (d.auditor ? ' · audited by ' + esc(d.auditor) : '') +
+          ' · <a href="' + esc(d.source_url) + '" target="_blank" rel="noopener noreferrer">filing on SEC.gov</a></p>' +
+      '</div>');
+
+    parts.push('<dl class="metrics">' +
+      metric('Revenue',      usdM(L.revenue_m),  L.revenue_growth_pct == null ? '' : pct(L.revenue_growth_pct) + ' YoY') +
+      metric('Gross margin', L.gross_margin_pct == null ? none : L.gross_margin_pct.toFixed(1) + '%') +
+      metric('Op. margin',   L.operating_margin_pct == null ? none : L.operating_margin_pct.toFixed(1) + '%') +
+      metric('Net income',   usdM(L.net_income_m), L.net_margin_pct == null ? '' : L.net_margin_pct.toFixed(1) + '% margin') +
+      metric('EPS diluted',  L.eps == null ? none : '$' + L.eps.toFixed(2), L.eps_growth_pct == null ? '' : pct(L.eps_growth_pct) + ' YoY') +
+      metric('Free cash flow', usdM(L.fcf_m), L.fcf_margin_pct == null ? '' : L.fcf_margin_pct.toFixed(1) + '% margin') +
+      metric('ROE',          L.roe_pct == null ? none : L.roe_pct.toFixed(1) + '%') +
+      metric('Total debt',   usdM(L.total_debt_m), L.net_cash_m == null ? '' : (L.net_cash_m >= 0 ? 'net cash ' : 'net debt ') + usdM(Math.abs(L.net_cash_m))) +
+      '</dl>');
+
+    if (d.history && d.history.length){
+      parts.push('<h3>Revenue and EPS history</h3><table class="ftable"><thead><tr>' +
+        '<th>Fiscal year end</th><th>Revenue ($M)</th><th>Net income ($M)</th><th>EPS</th>' +
+        '</tr></thead><tbody>' +
+        d.history.map(r => '<tr><td>' + esc(r.year) + '</td><td>' + num(r.revenue_m, 0) +
+          '</td><td>' + num(r.net_income_m, 0) + '</td><td>' +
+          (r.eps == null ? none : r.eps.toFixed(2)) + '</td></tr>').join('') +
+        '</tbody></table>');
+    }
+
+    if (d.risk && (d.risk.summary || (d.risk.added || []).length)){
+      let r = '<h3>What changed in the risks</h3><div class="risk">';
+      if (d.risk.summary) r += '<p class="tally">' + esc(d.risk.summary) + '</p>';
+      if ((d.risk.added || []).length){
+        r += '<ul>' + d.risk.added.map(t => '<li>' + esc(t) + '</li>').join('') + '</ul>';
+      }
+      parts.push(r + '</div>');
+    }
+
+    parts.push(reading(d));
+
+    if (d.missing && d.missing.length){
+      parts.push('<p class="runstat">Not tagged by this filer, so left blank: ' +
+        esc(d.missing.join(', ')) + '</p>');
+    }
+
+    if (d.files && d.files.length){
+      parts.push('<h3>Everything that landed in ' + esc(d.dir) + '</h3><div class="files">' +
+        d.files.map(f => '<a href="' + esc(f.href) + '" target="_blank" rel="noopener">' +
+          '<span class="name">' + esc(f.name) + '</span>' +
+          '<span class="kb">' + f.kb + ' KB</span></a>').join('') +
+        '</div>');
+    }
+
+    const run = d.run || {};
+    parts.push('<p class="runstat">' + (run.seconds != null ? run.seconds + 's' : '') +
+      (run.sec_requests != null ? ' · ' + run.sec_requests + ' SEC requests · ' +
+        run.cache_hits + ' cache hits' : '') + '</p>');
+
+    out.innerHTML = parts.join('');
+    wireReading();
+    out.hidden = false;
+  }
+
+  let timer = null;
+  function stopTimer(){ if (timer) { clearInterval(timer); timer = null; } }
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const ticker = input.value.trim().toUpperCase();
+    if (!ticker) return;
+
+    btn.disabled = true; input.disabled = true;
+    label.textContent = 'Pulling…';
+    out.hidden = true; out.innerHTML = '';
+    status.dataset.tone = '';
+
+    const t0 = Date.now();
+    const tick = () => {
+      const s = Math.round((Date.now() - t0) / 1000);
+      status.innerHTML = 'Reading ' + esc(ticker) +
+        ' from SEC EDGAR… <span class="tick">' + s + 's</span><br>' +
+        'About fifteen seconds cold, instant once the filing is cached.';
+    };
+    tick(); stopTimer(); timer = setInterval(tick, 1000);
+
+    try {
+      const res = await fetch('/api/extract', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ticker: ticker})
+      });
+      const data = await res.json();
+      stopTimer();
+      if (!res.ok) throw new Error(data.error || ('Request failed (' + res.status + ')'));
+      status.textContent = '';
+      render(data);
+      out.scrollIntoView({behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start'});
+    } catch (err) {
+      stopTimer();
+      status.dataset.tone = 'error';
+      const offline = /Failed to fetch|NetworkError/i.test(err.message);
+      status.textContent = offline
+        ? 'Can’t reach the extractor. Start it with:  python3 serve.py'
+        : err.message;
+    } finally {
+      btn.disabled = false; input.disabled = false;
+      label.textContent = 'Pull the 10-K';
+    }
+  });
+
+  document.querySelectorAll('[data-fill]').forEach(b => {
+    b.addEventListener('click', () => {
+      input.value = b.dataset.fill;
+      form.requestSubmit();
+    });
+  });
+
+  // /?t=NVDA pulls that filing on load, so a result is a shareable link
+  const deep = new URLSearchParams(location.search).get('t');
+  if (deep) { input.value = deep.toUpperCase(); form.requestSubmit(); }
+})();
+
+document.querySelectorAll('a[href^="#"]').forEach(a=>{
+  a.addEventListener('click',e=>{
+    const t=document.querySelector(a.getAttribute('href'));
+    if(!t)return;
+    e.preventDefault();
+    const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+    t.scrollIntoView({behavior:reduce?'auto':'smooth',block:'start'});
+  });
+});
+</script>
+</body>
+</html>

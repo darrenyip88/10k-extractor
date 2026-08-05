@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>10K AI — the 10-K, taken apart</title>
+<meta name="description" content="Give it a ticker, get the 10-K and everything useful inside it. Every Item as its own file, the as-filed statements, ten years of financials, and a diff of this year's risks against last year's. All from SEC EDGAR.">
+
+<style>
+/* ---- faces ------------------------------------------------------------- */
+@font-face{font-family:"Source Serif 4";src:url("assets/fonts/source-serif.woff2") format("woff2");font-weight:400 700;font-style:normal;font-display:swap}
+@font-face{font-family:"Public Sans";src:url("assets/fonts/public-sans.woff2") format("woff2");font-weight:300 700;font-style:normal;font-display:swap}
+
+:root{
+  --ink:#141414;
+  --paper:#fff;
+  --quiet:#565656;
+  --hair:rgba(20,20,20,.18);
+  --gutter:8px;
+  --serif:"Source Serif 4",Georgia,serif;
+  --sans:"Public Sans",-apple-system,"Helvetica Neue",Arial,sans-serif;
+  --col:minmax(0,1fr);
+}
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;padding:var(--gutter);
+  background:var(--paper);color:var(--ink);
+  font-family:var(--sans);font-weight:400;
+  font-synthesis-weight:none;
+  -webkit-font-smoothing:antialiased;
+}
+img{display:block;max-width:100%}
+a{color:inherit}
+::selection{background:var(--ink);color:var(--paper)}
+:focus-visible{outline:1.5px solid var(--ink);outline-offset:3px}
+
+/* ---- the plate --------------------------------------------------------- */
+.plate{
+  position:relative;margin:0;
+  width:100%;height:min(82svh,max(58svh,calc((100vw - 2*var(--gutter))/1.5)));
+  overflow:hidden;
+}
+.plate>img{
+  position:absolute;inset:0;width:100%;height:100%;
+  object-fit:cover;object-position:50% 42%;
+  filter:grayscale(1) contrast(1.04);
+}
+.veil{position:absolute;inset:0;overflow:hidden;pointer-events:none}
+.veil img{
+  position:absolute;inset:0;width:100%;height:100%;
+  object-fit:cover;object-position:50% 42%;
+}
+.veil--1{
+  -webkit-mask-image:linear-gradient(to bottom,transparent 44%,#000 64%);
+          mask-image:linear-gradient(to bottom,transparent 44%,#000 64%);
+}
+.veil--1 img{filter:grayscale(1) contrast(1.04) blur(9px);transform:scale(1.04)}
+.veil--2{
+  -webkit-mask-image:linear-gradient(to bottom,transparent 52%,#000 74%);
+          mask-image:linear-gradient(to bottom,transparent 52%,#000 74%);
+}
+.veil--2 img{filter:grayscale(1) contrast(1.04) brightness(.82) blur(26px);transform:scale(1.07)}
+.veil--3{
+  -webkit-mask-image:linear-gradient(to bottom,transparent 62%,#000 88%);
+          mask-image:linear-gradient(to bottom,transparent 62%,#000 88%);
+}
+.veil--3 img{filter:grayscale(1) contrast(1.04) brightness(.56) blur(54px);transform:scale(1.12)}
+
+/* type sits on the grid, flush left with the page's first column */
+.plate__type{
+  position:absolute;left:0;right:0;bottom:clamp(1.8rem,5.5vh,3.6rem);
+  display:grid;grid-template-columns:repeat(12,var(--col));
+  gap:0 clamp(.75rem,1.6vw,1.5rem);
+  padding:0 clamp(1rem,3.2vw,2.4rem);
+}
+.plate__type h1{
+  grid-column:1/-1;margin:0;
+  font-family:var(--serif);font-weight:400;
+  font-size:clamp(1.75rem,7.2vw,5.6rem);
+  line-height:.94;letter-spacing:-.028em;
+  color:#fff;white-space:nowrap;
+}
+.plate__type p{
+  grid-column:1/-1;margin:clamp(.85rem,1.8vh,1.25rem) 0 0;
+  max-width:44ch;
+  font-size:clamp(.85rem,1.05vw,1rem);line-height:1.5;
+  color:#f0f0f0;
+}
+@media (min-width:900px){
+  .plate__type p{grid-column:1/7;max-width:none}
+}
+
+/* ---- actions ----------------------------------------------------------- */
+.actions{
+  display:flex;gap:.5rem;flex-wrap:wrap;
+  padding:clamp(1.3rem,3.2vh,2.1rem) clamp(1rem,3.2vw,2.4rem) 0;
+}
+.pill{
+  display:inline-flex;align-items:center;gap:.6em;
+  font-family:var(--serif);font-weight:500;
+  font-size:.9375rem;
+  padding:.7em 1.45em;border-radius:999px;
+  text-decoration:none;border:1px solid var(--ink);
+  transition:background-color .22s cubic-bezier(.22,1,.36,1),color .22s cubic-bezier(.22,1,.36,1);
+}
+.pill--solid{background:var(--ink);color:#fff}
+.pill--solid:hover{background:#000}
+.pill--ghost{background:var(--paper);color:var(--ink);border-color:rgba(20,20,20,.42)}
+.pill--ghost:hover{background:var(--ink);color:#fff;border-color:var(--ink)}
+.pill svg{width:.95em;height:.95em;flex:none}
+button.pill{cursor:pointer;-webkit-appearance:none;appearance:none;line-height:1.2}
+.pill__label{display:inline-block;text-align:center}
+.cmd{
+  padding-left:clamp(1rem,3.2vw,2.4rem);
+  margin:clamp(.75rem,1.9vh,1.05rem) 0 0;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:.75rem;letter-spacing:0;color:var(--quiet);
+}
+.cmd-note{
+  padding-left:clamp(1rem,3.2vw,2.4rem);
+  margin:.5rem 0 0;font-size:.75rem;color:var(--quiet);
+}
+
+/* ---- grid bands -------------------------------------------------------- */
+.band{
+  display:grid;grid-template-columns:repeat(12,var(--col));
+  gap:0 clamp(.75rem,1.6vw,1.5rem);
+  padding:clamp(3.4rem,8vh,6rem) clamp(1rem,3.2vw,2.4rem) 0;
+}
+.band>*{grid-column:1/-1}
+.label{
+  font-size:.6875rem;font-weight:600;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--quiet);margin:0 0 1.1rem;
+  padding-top:.9rem;border-top:1px solid var(--ink);
+}
+@media (min-width:900px){
+  .label{grid-column:1/3;margin-bottom:0}
+  .band>.rows,.band>.stack{grid-column:3/-1}
+  .band{border-top:none}
+  .label+*{padding-top:.9rem;border-top:1px solid var(--ink)}
+}
+
+/* work: an index, not cards */
+.row{
+  display:grid;grid-template-columns:1fr;gap:.3rem;
+  padding:clamp(1.15rem,2.6vh,1.7rem) 0;
+  border-bottom:1px solid var(--hair);
+}
+.row:first-child{padding-top:clamp(1.15rem,2.6vh,1.7rem)}
+.row h3{
+  margin:0;font-family:var(--serif);font-weight:400;
+  font-size:clamp(1.15rem,2.1vw,1.6rem);line-height:1.15;letter-spacing:-.014em;
+}
+.row p{margin:0;font-size:.9375rem;line-height:1.55;color:var(--quiet);max-width:60ch}
+.row .meta{font-size:.6875rem;letter-spacing:.14em;text-transform:uppercase;color:var(--quiet)}
+@media (min-width:760px){
+  .row{grid-template-columns:1fr 1.35fr;column-gap:clamp(1rem,2.4vw,2rem);align-items:baseline}
+  .row h3{grid-row:1;grid-column:1}
+  .row .meta{grid-row:2;grid-column:1;padding-top:.45rem}
+  .row p{grid-row:1/3;grid-column:2}
+}
+
+/* approach: stacked statements, hairline separated */
+.stack>div{padding:clamp(1.15rem,2.6vh,1.7rem) 0;border-bottom:1px solid var(--hair)}
+.stack h3{margin:0 0 .45rem;font-family:var(--serif);font-weight:600;font-size:1.0625rem;letter-spacing:-.006em}
+.stack p{margin:0;font-size:.9375rem;line-height:1.6;color:var(--quiet);max-width:64ch}
+
+/* ---- close ------------------------------------------------------------- */
+.close{
+  display:flex;flex-wrap:wrap;gap:.5rem 1.5rem;justify-content:space-between;align-items:baseline;
+  margin:clamp(3.4rem,8vh,6rem) 0 0;
+  padding:1.1rem clamp(1rem,3.2vw,2.4rem) clamp(1.8rem,4.5vh,2.8rem);
+  border-top:1px solid var(--ink);
+  font-size:.8125rem;color:var(--quiet);
+}
+.close strong{
+  font-family:var(--serif);font-weight:600;font-size:1rem;letter-spacing:-.01em;color:var(--ink);
+}
+.close a{text-decoration:none;border-bottom:1px solid rgba(20,20,20,.3);padding-bottom:1px}
+.close a:hover{border-bottom-color:var(--ink)}
+
+/* ---- one authored moment ---------------------------------------------- */
+@keyframes settle{from{opacity:0;filter:blur(10px);transform:translateY(10px)}to{opacity:1;filter:blur(0);transform:none}}
+.plate__type h1,.plate__type p,.actions,.cmd{animation:settle 1.1s cubic-bezier(.16,1,.3,1) both}
+.plate__type p{animation-delay:.14s}
+.actions{animation-delay:.26s}
+.cmd{animation-delay:.32s}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition-duration:.01ms!important}}
+</style>
+</head>
+<body>
+<!--
+THESIS: The engraving is treated as an editorial plate on a working grid; the
+  page refuses the centred-hero symmetry and reads like a broadsheet index.
+OWN-WORLD: Pure white, 12-column grid, flush-left everything, Source Serif 4
+  display against Public Sans in tracked uppercase labels, 1px black section
+  rules, no fills, no shadows, no colour.
+STORY: Visitor learns in one line that a ticker becomes a dismantled
+  10-K, sees exactly which files land, and copies the command.
+FIRST VIEWPORT: 3:2 engraving to 82svh; bottom third dissolved by three masked,
+  blurred image layers; white headline flush to column 1 inside the grey, subtitle
+  held to columns 1-6; pills below the plate, left aligned to the same column.
+FORM: Swiss editorial grid. Brief-pinned by the user (monochrome, engraved,
+  serif system) — direction not rolled.
+FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
+-->
+
+<main>
+  <figure class="plate">
+    <img src="assets/hero.jpg" alt="Stipple engraving of the Acropolis of Athens: the temple on the rock left of centre, ancient rooftops and a theatre in the foreground, bare mountains and a bay across the horizon.">
+    <div class="veil veil--1"><img src="assets/hero.jpg" alt=""></div>
+    <div class="veil veil--2"><img src="assets/hero.jpg" alt=""></div>
+    <div class="veil veil--3"><img src="assets/hero.jpg" alt=""></div>
+    <div class="plate__type">
+      <h1>The 10-K, taken apart</h1>
+      <p>Give it a ticker. Get every Item as its own file, the as-filed statements, ten years of financials, and a diff of this year's risks against last year's.</p>
+    </div>
+  </figure>
+
+  <div class="actions">
+    <button class="pill pill--solid" type="button" data-copy="./run_10k.sh AAPL">
+      <span class="pill__label">Copy the command</span>
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="5.5" y="5.5" width="9" height="9" rx="1.2"/><path d="M10.5 5.5v-3a1 1 0 0 0-1-1h-7a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h3"/>
+      </svg>
+    </button>
+    <a class="pill pill--ghost" href="#output">See what it outputs</a>
+  </div>
+  <p class="cmd">./run_10k.sh AAPL</p>
+  <p class="cmd-note">Runs locally in your terminal — no signup, no server.</p>
+
+  <section class="band" id="output">
+    <h2 class="label">What lands in the folder</h2>
+    <div class="rows">
+      <article class="row">
+        <h3>SUMMARY.md</h3>
+        <span class="meta">Open this first</span>
+        <p>Company identifiers, the latest year's numbers, revenue and EPS history, the risk-diff headline, and an index of everything else.</p>
+      </article>
+      <article class="row">
+        <h3>sections/</h3>
+        <span class="meta">Ten Items, split out</span>
+        <p>Business, risk factors, MD&amp;A, legal proceedings, market risk, financial statements — each one its own file, so you read the section instead of the whole document.</p>
+      </article>
+      <article class="row">
+        <h3>statements/</h3>
+        <span class="meta">As filed · md + json</span>
+        <p>Income statement, balance sheet, cash flow and equity, taken from the filing itself rather than a vendor's normalisation.</p>
+      </article>
+      <article class="row">
+        <h3>trends.md</h3>
+        <span class="meta">Ten years</span>
+        <p>Margins, free cash flow, ROE, CAGR and share count across a decade — plus a note on which XBRL concepts fed each row and which were tried and not found.</p>
+      </article>
+      <article class="row">
+        <h3>risk_diff.md</h3>
+        <span class="meta">Year over year</span>
+        <p>Risks added, removed and reworded against last year. Every added risk prints beside its closest dropped counterpart with a similarity score, and a wholesale rewrite gets flagged at the top.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="band" id="approach">
+    <h2 class="label">How it works</h2>
+    <div class="stack">
+      <div>
+        <h3>No key, no quota, no cost</h3>
+        <p>Everything comes from SEC EDGAR. A full extraction is about twelve requests and fifteen seconds cold, then instant — filings are immutable once accepted, so the cache never expires.</p>
+      </div>
+      <div>
+        <h3>No model touches the filing</h3>
+        <p>The tool extracts and structures, nothing else. Reading is yours to do, or your agent's, with the source text sitting right there to check against.</p>
+      </div>
+      <div>
+        <h3>Missing stays missing</h3>
+        <p>Banks have no gross profit line. Berkshire doesn't tag diluted EPS undimensioned. A blank stays blank and the file says what was tried, rather than quietly substituting something close.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer class="close">
+    <strong>10K AI</strong>
+    <span>Data from SEC EDGAR. Extraction only — not investment advice.</span>
+  </footer>
+</main>
+
+<script>
+document.querySelectorAll('[data-copy]').forEach(b=>{
+  const label=b.querySelector('.pill__label');
+  const original=label.textContent;
+  label.style.minWidth=label.getBoundingClientRect().width+'px';
+  b.addEventListener('click',async()=>{
+    const text=b.dataset.copy;
+    let ok=false;
+    try{ await navigator.clipboard.writeText(text); ok=true; }
+    catch{
+      // ponytail: execCommand is deprecated, but it's the only thing that copies on file:// (no secure context)
+      const t=document.createElement('textarea');
+      t.value=text; t.setAttribute('readonly','');
+      t.style.cssText='position:fixed;top:0;left:0;opacity:0';
+      document.body.appendChild(t); t.select(); t.setSelectionRange(0,text.length);
+      try{ ok=document.execCommand('copy'); }catch{}
+      t.remove();
+    }
+    if(!ok){
+      const range=document.createRange();
+      range.selectNodeContents(document.querySelector('.cmd'));
+      const sel=getSelection();sel.removeAllRanges();sel.addRange(range);
+    }
+    label.textContent=ok?'Copied':'Press \u2318C';
+    setTimeout(()=>{label.textContent=original;},1600);
+  });
+});
+document.querySelectorAll('a[href^="#"]').forEach(a=>{
+  a.addEventListener('click',e=>{
+    const t=document.querySelector(a.getAttribute('href'));
+    if(!t)return;
+    e.preventDefault();
+    const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+    t.scrollIntoView({behavior:reduce?'auto':'smooth',block:'start'});
+  });
+});
+</script>
+</body>
+</html>
