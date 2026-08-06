@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>10K AI — the 10-K, taken apart</title>
 <meta name="description" content="Give it a ticker, get the 10-K and everything useful inside it. Every Item as its own file, the as-filed statements, ten years of financials, and a diff of this year's risks against last year's. All from SEC EDGAR.">
+<link rel="icon" href="assets/favicon.png" type="image/png">
 
 <style>
 /* ---- faces ------------------------------------------------------------- */
@@ -231,7 +232,7 @@ button.pill{cursor:pointer;-webkit-appearance:none;appearance:none;line-height:1
 }
 .risk li:last-child{border-bottom:none}
 
-/* ---- the reading room: the four Items worth opening -------------------- */
+/* ---- the reading room: the three Items worth opening ------------------- */
 .read{margin-top:1rem}
 .read details{border-bottom:1px solid var(--hair)}
 .read details:last-child{border-bottom:none}
@@ -256,13 +257,36 @@ button.pill{cursor:pointer;-webkit-appearance:none;appearance:none;line-height:1
   grid-column:1/-1;margin:.3rem 0 0;max-width:62ch;
   font-size:.8125rem;line-height:1.55;color:var(--quiet);
 }
-/* the section itself: full text, scrolled in place so the page keeps its shape */
+/* The section itself, set as prose rather than dumped as preformatted text.
+   Scrolled in place so the page keeps its shape. The measure is the point:
+   62ch is readable, a full-width 58rem line of 10-K prose is not. */
 .read .body{
-  margin:0 0 1.3rem;max-height:26rem;overflow:auto;
+  margin:0 0 1.3rem;max-height:30rem;overflow:auto;
   padding-top:.9rem;border-top:1px solid var(--hair);
-  font-family:var(--serif);font-size:.9375rem;line-height:1.62;
-  white-space:pre-wrap;overflow-wrap:anywhere;
 }
+.read .body p{
+  margin:0 0 .85em;max-width:66ch;
+  font-family:var(--serif);font-size:.9375rem;line-height:1.62;
+  overflow-wrap:break-word;
+}
+.read .body h4{
+  margin:1.5em 0 .5em;font-family:var(--sans);font-weight:600;
+  font-size:.6875rem;letter-spacing:.16em;text-transform:uppercase;color:var(--quiet);
+  max-width:66ch;
+}
+.read .body h4:first-child{margin-top:0}
+.read .body p.note{
+  font-family:var(--sans);font-size:.75rem;line-height:1.55;color:var(--quiet);
+}
+/* condensed / full text, set as a caption-weight control so it never competes
+   with the drawer's own heading */
+.read .swap{
+  font:inherit;font-family:var(--sans);font-size:.6875rem;font-weight:600;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--quiet);
+  background:none;border:0;border-bottom:1px solid var(--hair);
+  padding:0 0 2px;margin:0 0 1rem;cursor:pointer;
+}
+.read .swap:hover{color:var(--ink);border-bottom-color:var(--ink)}
 
 /* paths like statements/consolidated_balance_sheets_parenthetical.json are
    longer than any sensible column, so the name wraps and the size stays put */
@@ -440,6 +464,11 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
         <p>Margins, free cash flow, ROE, CAGR and share count across a decade — plus a note on which XBRL concepts fed each row and which were tried and not found.</p>
       </article>
       <article class="item">
+        <h3>What the whole thing is worth</h3>
+        <span class="year">valuation.md</span>
+        <p>The share count three ways — cover page, weighted-average diluted, and fully diluted with options and unvested RSUs from the footnote — then market cap, the enterprise value bridge, EBIT, EBITDA and the multiples.</p>
+      </article>
+      <article class="item">
         <h3>What changed in the risks</h3>
         <span class="year">risk_diff.md</span>
         <p>Risks added, removed and reworded against last year. Every added risk prints beside its closest dropped counterpart with a similarity score, and a wholesale rewrite gets flagged at the top.</p>
@@ -453,7 +482,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
     <div class="statement">
       <div>
         <h3>No key, no quota, no cost</h3>
-        <p>Everything comes from SEC EDGAR. A full extraction is about twelve requests and fifteen seconds cold, then instant — filings are immutable once accepted, so the cache never expires.</p>
+        <p>Everything comes from SEC EDGAR, and nothing comes from anywhere else. A full extraction is about seventeen requests and fifteen seconds cold, then instant — filings are immutable once accepted, so the cache never expires. Even the share price is the filing's own, implied by the cover page rather than fetched from a quote feed, so nothing here moves after the filing date.</p>
       </div>
       <div>
         <h3>No model touches the filing</h3>
@@ -493,57 +522,105 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
   const pct  = v => v == null ? none : (v > 0 ? '+' : '') + v.toFixed(1) + '%';
   const usdM = v => v == null ? none : '$' + num(v, 0) + 'M';
 
-  // The four Items that carry the story the numbers can't. Everything else the
-  // extractor writes stays one click away in the file list below.
+  // The three Items that carry the story the numbers can't. Item 8 used to sit
+  // here and no longer does: it is the statements and their notes, which this
+  // page already renders as tables and links as files — a second copy of them
+  // as 200 KB of prose was the least-read drawer on the page.
   const READING = [
-    ['sections/item1_business.md', 'Item 1', 'Business',
+    ['item1_business', 'Item 1', 'Business',
      'What the company actually does — products, customers, segments, competition. Start here if the company is new to you. Answers “how does this thing make money?”'],
-    ['sections/item1a_risk_factors.md', 'Item 1A', 'Risk Factors',
+    ['item1a_risk_factors', 'Item 1A', 'Risk Factors',
      'Everything that could go wrong, in the company’s own words. Much is boilerplate, but the first few risks and anything company-specific are worth reading. New risks added since last year are a tell — see the diff above.'],
-    ['sections/item7_mdna.md', 'Item 7', 'Management’s Discussion &amp; Analysis',
+    ['item7_mdna', 'Item 7', 'Management’s Discussion &amp; Analysis',
      'Management explains the results in plain English — why revenue moved, what drove margins, what they expect. The most information-dense narrative in the filing. Read it closely.'],
-    ['sections/item8_financial_statements.md', 'Item 8', 'Financial Statements &amp; Notes',
-     'The audited income statement, balance sheet and cash flow statement, plus the footnotes — where the real detail hides: debt maturities, segment breakdowns, revenue recognition policy, useful lives behind depreciation and amortisation, leases, pensions, stock-based comp.'],
   ];
+
+  // A line that continues the one above rather than starting something new.
+  // Section text comes out of the filing one line per inline element, so a
+  // single sentence arrives split around every superscript ® — dumping that
+  // straight into the page is what made the old drawers unreadable. Same rule
+  // the extractor's condenser uses.
+  const CONTINUES = /^[a-z(\[«"'’“”®™°,;:.)\-–—%$&/]/;
+
+  function paragraphs(text){
+    const out = [];
+    text.split('\n').map(l => l.trim()).filter(Boolean).forEach(line => {
+      if (out.length && CONTINUES.test(line)) out[out.length - 1] += ' ' + line;
+      else out.push(line);
+    });
+    return out;
+  }
+
+  // The condensed file is markdown: "## " for a heading, "_..._" for the note
+  // at the top, everything else a paragraph. The full section file has neither,
+  // so the same renderer handles both.
+  function prose(text){
+    return paragraphs(text)
+      .filter(l => !l.startsWith('# '))
+      .map(l => l.startsWith('## ') ? '<h4>' + esc(l.slice(3)) + '</h4>'
+              : /^_.+_$/.test(l)    ? '<p class="note">' + esc(l.slice(1, -1)) + '</p>'
+              :                       '<p>' + esc(l) + '</p>')
+      .join('');
+  }
 
   function reading(d){
     const by = {};
     (d.files || []).forEach(f => { by[f.name] = f; });
-    const blocks = READING.map(([name, no, title, why]) => {
-      const f = by[name];
-      if (!f) return '';   // a filer that didn't file this Item gets no empty drawer
-      // NVIDIA and JPMorgan answer Item 8 with one sentence pointing at Part IV.
-      // The section is honestly that short; the tables are in statements/.
-      const stub = f.kb < 2
-        ? ' <em>This filer cross-references the statements rather than restating them here — the tables are in statements/ below.</em>'
-        : '';
+    const blocks = READING.map(([stem, no, title, why]) => {
+      const full = by['sections/' + stem + '.md'];
+      if (!full) return '';   // a filer that didn't file this Item gets no drawer
+      // Extractions from before the condenser have no summaries/ file; those
+      // drawers open on the full section instead of showing an empty one.
+      const brief = by['summaries/' + stem + '.md'];
+      const first = brief || full;
       return '<details><summary>' +
         '<span class="no">' + no + '</span>' +
         '<span class="title">' + title + '</span>' +
-        '<span class="kb">' + f.kb + ' KB<span class="sign"></span></span>' +
-        '<span class="why">' + why + stub + '</span>' +
-        '</summary><pre class="body" data-src="' + esc(f.href) + '">Loading…</pre></details>';
+        '<span class="kb">' + full.kb + ' KB<span class="sign"></span></span>' +
+        '<span class="why">' + why + '</span>' +
+        '</summary><div class="body"' +
+          ' data-brief="' + esc(brief ? brief.href : '') + '"' +
+          ' data-full="' + esc(full.href) + '"' +
+          ' data-src="' + esc(first.href) + '"><p>Loading…</p></div></details>';
     }).join('');
-    return blocks ? '<h3>The four sections worth reading</h3><div class="read">' + blocks + '</div>' : '';
+    return blocks
+      ? '<h3>The three sections worth reading</h3><div class="read">' + blocks + '</div>'
+      : '';
   }
 
-  // fetched on first open, not on render: Item 8 alone runs to 200 KB and most
+  async function load(body){
+    const src = body.dataset.src;
+    if (body.dataset.loaded === src) return;
+    try {
+      const r = await fetch(src);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const text = await r.text();
+      const swap = body.dataset.brief && body.dataset.brief !== body.dataset.full
+        ? '<button type="button" class="swap">' +
+            (src === body.dataset.brief ? 'Read the full section' : 'Back to the condensed version') +
+          '</button>'
+        : '';
+      body.innerHTML = swap + prose(text);
+      body.dataset.loaded = src;
+      body.scrollTop = 0;
+      const button = body.querySelector('.swap');
+      if (button) button.addEventListener('click', () => {
+        body.dataset.src = src === body.dataset.brief ? body.dataset.full : body.dataset.brief;
+        load(body);
+      });
+    } catch (err) {
+      body.dataset.loaded = '';
+      body.innerHTML = '<p>Could not load this section — it is still on disk at ' +
+        esc(src) + '</p>';
+    }
+  }
+
+  // fetched on first open, not on render: Item 1A alone runs to 70 KB and most
   // visits never open it
   function wireReading(){
     out.querySelectorAll('.read details').forEach(dt => {
-      dt.addEventListener('toggle', async () => {
-        const pre = dt.querySelector('.body');
-        if (!dt.open || pre.dataset.loaded) return;
-        pre.dataset.loaded = '1';
-        try {
-          const r = await fetch(pre.dataset.src);
-          if (!r.ok) throw new Error('HTTP ' + r.status);
-          pre.textContent = await r.text();
-        } catch (err) {
-          pre.dataset.loaded = '';
-          pre.textContent = 'Could not load this section — it is still on disk at '
-            + pre.dataset.src;
-        }
+      dt.addEventListener('toggle', () => {
+        if (dt.open) load(dt.querySelector('.body'));
       });
     });
   }
@@ -551,6 +628,15 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
   function metric(term, value, delta){
     return '<div class="metric"><dt>' + esc(term) + '</dt><dd>' + value +
       (delta ? '<span class="delta">' + delta + '</span>' : '') + '</dd></div>';
+  }
+
+  // Four fixed tracks, so a count that isn't a multiple of four leaves empty
+  // cells — and an empty cell has no bottom hairline, which ends the rule
+  // mid-air. Pad the row out instead.
+  function grid(cells){
+    const pad = (4 - cells.length % 4) % 4;
+    return '<dl class="metrics">' + cells.join('') +
+      '<div class="metric"></div>'.repeat(pad) + '</dl>';
   }
 
   function render(d){
@@ -565,16 +651,66 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
           ' · <a href="' + esc(d.source_url) + '" target="_blank" rel="noopener noreferrer">filing on SEC.gov</a></p>' +
       '</div>');
 
-    parts.push('<dl class="metrics">' +
-      metric('Revenue',      usdM(L.revenue_m),  L.revenue_growth_pct == null ? '' : pct(L.revenue_growth_pct) + ' YoY') +
-      metric('Gross margin', L.gross_margin_pct == null ? none : L.gross_margin_pct.toFixed(1) + '%') +
-      metric('Op. margin',   L.operating_margin_pct == null ? none : L.operating_margin_pct.toFixed(1) + '%') +
-      metric('Net income',   usdM(L.net_income_m), L.net_margin_pct == null ? '' : L.net_margin_pct.toFixed(1) + '% margin') +
-      metric('EPS diluted',  L.eps == null ? none : '$' + L.eps.toFixed(2), L.eps_growth_pct == null ? '' : pct(L.eps_growth_pct) + ' YoY') +
-      metric('Free cash flow', usdM(L.fcf_m), L.fcf_margin_pct == null ? '' : L.fcf_margin_pct.toFixed(1) + '% margin') +
-      metric('ROE',          L.roe_pct == null ? none : L.roe_pct.toFixed(1) + '%') +
-      metric('Total debt',   usdM(L.total_debt_m), L.net_cash_m == null ? '' : (L.net_cash_m >= 0 ? 'net cash ' : 'net debt ') + usdM(Math.abs(L.net_cash_m))) +
-      '</dl>');
+    const sh = v => v == null ? none : num(v / 1e6, 1) + 'M';
+
+    parts.push(grid([
+      metric('Revenue',      usdM(L.revenue_m),  L.revenue_growth_pct == null ? '' : pct(L.revenue_growth_pct) + ' YoY'),
+      metric('Gross margin', L.gross_margin_pct == null ? none : L.gross_margin_pct.toFixed(1) + '%'),
+      metric('Op. margin',   L.operating_margin_pct == null ? none : L.operating_margin_pct.toFixed(1) + '%'),
+      metric('Net income',   usdM(L.net_income_m), L.net_margin_pct == null ? '' : L.net_margin_pct.toFixed(1) + '% margin'),
+      metric('EPS diluted',  L.eps == null ? none : '$' + L.eps.toFixed(2), L.eps_growth_pct == null ? '' : pct(L.eps_growth_pct) + ' YoY'),
+      metric('Free cash flow', usdM(L.fcf_m), L.fcf_margin_pct == null ? '' : L.fcf_margin_pct.toFixed(1) + '% margin'),
+      metric('ROE',          L.roe_pct == null ? none : L.roe_pct.toFixed(1) + '%'),
+      metric('Total debt',   usdM(L.total_debt_m), L.net_cash_m == null ? '' : (L.net_cash_m >= 0 ? 'net cash ' : 'net debt ') + usdM(Math.abs(L.net_cash_m))),
+    ]));
+
+    // The rest of the line items a valuation model asks for. Every one of them
+    // is as filed; a blank means the filer never tagged it.
+    parts.push('<h3>The rest of the numbers, as filed</h3>' + grid([
+      metric('Operating income', usdM(L.operating_income_m)),
+      metric('D&A',              usdM(L.d_and_a_m)),
+      metric('Cash from ops',    usdM(L.operating_cash_flow_m)),
+      metric('Capex',            usdM(L.capex_m)),
+      metric('Total assets',     usdM(L.total_assets_m)),
+      metric('Inventory',        usdM(L.inventory_m)),
+      metric('Cash + ST inv.',   usdM(L.cash_st_inv_m)),
+      metric('Diluted shares',   sh(L.shares_diluted), 'weighted average'),
+      metric('Membership fees',  usdM(L.membership_fee_m), L.membership_fee_m == null ? '' : 'income statement'),
+      metric('MRQ revenue',      usdM(L.mrq_revenue_m), 'fourth quarter'),
+      metric('MRQ revenue (PY)', usdM(L.mrq_revenue_prior_m), 'prior-year Q4'),
+    ]));
+    if (L.mrq_revenue_m == null){
+      parts.push('<p class="runstat">No quarterly period is tagged in this 10-K, so the ' +
+        'most-recent-quarter rows are blank. The SEC dropped the selected-quarterly-data ' +
+        'requirement in 2021 — the quarter is in the 10-Q, and this tool reads 10-Ks.</p>');
+    }
+
+    const V = d.valuation;
+    if (V){
+      const x = v => v == null ? none : v.toFixed(1) + '×';
+      parts.push('<h3>Valuation</h3>' + grid([
+        metric('Share price', V.price == null ? none : '$' + V.price.toFixed(2),
+               V.price_as_of ? esc(V.price_as_of) : ''),
+        metric('Shares out.', sh(V.cover_shares), 'cover page'),
+        metric('Fully diluted', sh(V.fully_diluted), '+ options and RSUs'),
+        metric('Market cap', usdM(V.market_cap_m)),
+        metric('Enterprise value', usdM(V.ev_m),
+               V.ev_missing.length ? 'no ' + esc(V.ev_missing.join(' or ')) + ' tagged' : ''),
+        metric('EBIT / EBITDA', usdM(V.ebit_m) + ' / ' + usdM(V.ebitda_m)),
+        metric('EV / EBITDA', x(V.ev_ebitda), V.ev_sales == null ? '' : 'EV/Sales ' + x(V.ev_sales)),
+        metric('P/E', x(V.pe), V.ev_ebit == null ? '' : 'EV/EBIT ' + x(V.ev_ebit)),
+      ]));
+      // The price is the filing's own, not a quote. Saying where it comes from
+      // is the difference between a number and a number you can check.
+      if (V.price_is_floor){
+        parts.push('<p class="runstat">Price is ' + esc(V.price_source || '') +
+          ', so it is a <strong>floor</strong> — affiliate-held shares are excluded, and a ' +
+          'company whose insiders hold a real stake prices low by roughly that percentage. ' +
+          'Public float ' + usdM(V.public_float_m) + ' on ' + esc(V.price_as_of || '') +
+          '; market cap above is that float restated. Nothing on this page is a live quote.</p>');
+      }
+      if (V.warning) parts.push('<p class="runstat">' + esc(V.warning) + '</p>');
+    }
 
     if (d.history && d.history.length){
       parts.push('<h3>Revenue and EPS history</h3><table class="ftable"><thead><tr>' +

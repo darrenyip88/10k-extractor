@@ -1,11 +1,6 @@
 {
   "version": "0.0.1",
   "configurations": [
-    {
-      "name": "site",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": ["serve.py"],
-      "port": 4321
-    }
+    { "name": "10k-ai", "runtimeExecutable": "python3", "runtimeArgs": ["serve.py"], "port": 4321 }
   ]
 }

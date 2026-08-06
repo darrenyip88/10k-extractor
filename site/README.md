@@ -1,10 +1,10 @@
 # site — the 10K AI front end
 
-The chosen direction is **`v3-letterpress.html`**, and it now runs the extractor
-for real: type a ticker, get the filing back on the page.
+The chosen direction is **`v4-icarus.html`**, and it runs the extractor for
+real: type a ticker, get the filing back on the page.
 
 ```bash
-python3 serve.py
+cd "/Users/darren/Claude/Claude Code/10K AI" && python3 serve.py
 ```
 
 Then open <http://localhost:4321>. `serve.py` serves the site *and* the one
@@ -20,14 +20,14 @@ Stdlib only. No Flask, no new dependencies.
 
 | Route | Does |
 |---|---|
-| `GET /` | serves `v3-letterpress.html` |
+| `GET /` | serves `v4-icarus.html` |
 | `POST /api/extract` | `{"ticker":"AAPL"}` → runs `scripts/extract_10k.py`, returns the parsed filing as JSON |
 | `GET /api/cached` | tickers already sitting in `filings/` |
 | `GET /filings/...` | the extracted files themselves, so the file list on the page is clickable |
 
 `/api/extract` shells out to the same script `./run_10k.sh` calls, so the page
 and the CLI can't drift apart. Cached tickers come back in about 0.3s; a cold
-one is ~13 SEC requests and about 5 seconds.
+one is ~17 SEC requests plus one keyless price call, and about 5 seconds.
 
 Two guards worth knowing about, since neither is obvious from the outside:
 
@@ -38,19 +38,32 @@ Two guards worth knowing about, since neither is obvious from the outside:
   is untrusted third-party HTML; handing it over as text means the browser
   never executes anything inside it. `..` traversal returns 403.
 
-## The four sections worth reading
+## The three sections worth reading
 
-Under the metrics, the page opens Item 1 (Business), Item 1A (Risk Factors),
-Item 7 (MD&A) and Item 8 (Financial Statements & Notes) inline, each with a
-line on what it's for. They're `<details>` drawers that fetch their section
-file from `/filings/` on first open — Item 8 alone runs to 230 KB for KO and
-most visits never open it. No server change: the hrefs come from the file list
-`/api/extract` already returns, so a filer missing an Item simply gets no
-drawer.
+Under the metrics, the page opens Item 1 (Business), Item 1A (Risk Factors) and
+Item 7 (MD&A) inline, each with a line on what it's for. They're `<details>`
+drawers that fetch their file from `/filings/` on first open — Item 1A alone
+runs to 70 KB and most visits never open it. No server change: the hrefs come
+from the file list `/api/extract` already returns, so a filer missing an Item
+simply gets no drawer.
 
-NVIDIA and JPMorgan answer Item 8 with one sentence pointing at Part IV, so
-their section file is ~0.4 KB. Anything under 2 KB prints a note saying the
-tables are in `statements/` instead.
+**Item 8 used to be the fourth and isn't any more.** It's the statements and
+their notes — which this page already renders as tables and links as files — so
+the drawer was a second copy of them as 200 KB of prose, and it was the least
+opened thing on the page. NVIDIA and JPMorgan made that worse by answering Item
+8 with one sentence pointing at Part IV, so their drawer opened on 0.4 KB.
+
+**They open condensed, not raw.** The drawer loads `summaries/<item>.md` — the
+extractor's own condensed version, about a third the length, every sentence the
+company's own — and a control at the top swaps to the full section and back.
+
+Both views are set as prose: `<h4>` for headings, `<p>` at a 66ch measure. They
+used to be a `<pre>` with `white-space: pre-wrap`, which meant a 56rem line of
+10-K prose and no paragraph structure at all. The full section needs one more
+step, because section text comes out of the filing one line per inline element —
+a single sentence arrives split around every superscript ®. The page rejoins
+them with the same rule the extractor uses: a line opening lowercase or with
+punctuation belongs to the line above.
 
 ## Deep links
 
@@ -60,78 +73,196 @@ tables are in `statements/` instead.
 
 A value the filer never tagged renders as `—`, never as a substituted
 near-equivalent. This is visible on purpose: pull up `JPM` and gross margin,
-operating margin, free cash flow and total debt are all blank, because a bank
-doesn't report a gross profit line. `BRK.B` has no diluted EPS undimensioned.
-The list of what was tried and not found prints under the metrics.
+operating margin and free cash flow are all blank, because a bank reports no
+gross profit line, no operating income line and no capex. `BRK.B` has no diluted
+EPS undimensioned. The list of what was tried and not found prints under the
+metrics — twelve concepts for JPM.
 
-## The hero plate
+---
 
-`assets/hero.jpg` — a 19th-century stipple engraving of the Acropolis. Provenance was not recorded when the file was added; it is almost certainly public domain by age, but if you fork this and care, verify or swap it.
+# The design
 
-The bottom third is blurred rather than covered with a dark scrim, so the image
-stays an image. Three copies of the engraving sit over the original, each with
-a heavier `blur()` and a `mask-image` gradient starting lower down, so the blur
-deepens toward the bottom.
-
-Blur radii are deliberately modest (4 / 11 / 24px). An earlier pass ran
-9 / 26 / 54 and the architecture dissolved into fog — the darkening, not the
-blur, is what buys the text its contrast.
-
-Each blurred copy is `transform: scale()`d slightly. `filter: blur()` fades an
-element's own edges to transparent, and the scale pushes those soft edges
-outside the clip so no sharp strip shows at the bottom of the plate.
+The plate is **classical-glitch**: a filings tool borrowing its authority from a
+classical figure that is coming apart. Mythic, atmospheric, decayed, luminous.
+`v3`'s letterpress broadside is still on disk and is now the anti-reference —
+nothing carried over from it except the two typefaces and the promise that a
+blank stays blank.
 
 ## The ground
 
-`assets/bg-mosaic.png` — the background of the whole page below the landing.
-The landing (plate, headline, ticker box) is the one sheet of white; everything
-past it sits straight on the mosaic, separated by a 1px printed edge rather
-than a drop shadow, so the brief's flat world stays flat.
+Flat `#222222`, edge to edge, on every page including `index.html`. Not `#000` —
+pure black kills the artwork and the warm tones go muddy inside it. `#222222`
+still reads as black on screen and gives them somewhere to sit.
 
-It's Jules Coignet's *Der Poseidontempel in Paestum* (1844, public domain via
-Wikimedia Commons) rebuilt as a colour ASCII character mosaic: 150 cells
-across, each cell keeping the painting's own colour with one monospace glyph
-stamped into it, chosen by that cell's brightness. Digits and punctuation only
-— letters would let the eye start reading words instead of looking at the
-picture.
+Four inks, and only four:
 
-Regenerate with `python3 assets/make_mosaic.py`. `assets/src_canvas.jpg` is its
-input; `assets/src_temple.jpg` is the untrimmed gallery photo and can be
-deleted if you want the ~750KB back.
+| | | on `#222222` | carries |
+|---|---|---|---|
+| `--cream` | `#EFD5C8` | 11.4:1 | display type, values, the button |
+| `--dim` | `#B79C8D` | 6.2:1 | body text |
+| `--faint` | `#A98D7D` | 5.2:1 | tracked micro labels, placeholders |
+| `--umber` | `#5F4F45` | 2.0:1 | rules and the one bar. **Never a word.** |
 
-It's `background-size: cover` on the ground block itself — one continuous image
-scaled to the whole lower page, never tiled, so there's no seam to find. Not a
-fixed backdrop: `position: fixed` behind a page this tall means the browser
-scales a 1200px plate across ~3000px of document and the glyphs turn to mush,
-and it janks on iOS Safari at this size besides.
+Umber is the only value under 4.5:1 and it is never allowed to carry text. If it
+looks right on a label, the label wants `--faint`.
 
-**Measure the plate's brightness per pixel, not per cell.** `make_mosaic.py`
-caps every pixel at `MAX_L = 0.095` relative luminance, which is what puts cream
-`#efe7d8` at 5.9:1 and the quieter `#d8cfbd` at 4.7:1 on the worst pixel in the
-image. An earlier version measured the 150×150 cell average instead and reported
-5.3:1 on a ground that was really **2.6:1** — at the size the browser draws this,
-one glyph stroke is several pixels wide, and a cell average smooths away exactly
-the bright spots type has to sit on.
+## Attribution — unfinished
 
-## The app icon
+The three source plates in `assets/` — `src_flyer.jpg`, `src_icarus_cover.jpg`
+and `src_fallen.jpg` — were **supplied, not sourced**. They look like someone
+else's work (the ICARUS cover carries a "Noiiir" signature) and their licence is
+unknown, so the footer prints no art credit at all rather than a guessed one.
 
-`assets/app.icns`, drawn by `assets/make_icon.py` and installed by
-`../make_app.sh`. A Doric temple front in ink on paper with the site's double
-rule under it — flat shapes, not a crop of the engraving, because stipple at
-32px is grey mush. The rule is dropped below 48px, where three hairlines land
-inside one pixel. Rounded tile rather than full bleed: macOS doesn't mask icons
-the way iOS does, so a white square would sit in the Dock as a white square.
+**Settle this before the site is public.** Either establish the rights and print
+the credit, or swap in artwork whose licence is known. `src_genius.jpg` — Onorio
+Marinari's *Winged genius*, public domain via Wikimedia Commons — is still in
+`assets/` and was the first build's hero for exactly that reason.
+
+## The figure
+
+`assets/icarus.webp`, cut from `src_flyer.jpg` by `assets/make_icarus.py`. It
+bleeds off three edges and is the only thing on the page allowed to.
+
+**The join is the effect** — but only at the joins. The figure itself is left
+whole; what dissolves is every edge where the plate is *cut*: the left frame,
+where the outstretched hand runs off, and the diagonal along the bottom. A hard
+cutout looks pasted and a soft feather looks cheap; a dot matrix looks decided.
+
+Four things that each cost a pass:
+
+- **Luminance *is* the matte.** This source is line work on near-black, so
+  there is no threshold to tune and no flood fill to fight: alpha ramps
+  straight off luminance, the ground falls away, and the figure's own shadows
+  stay as honestly translucent as they were drawn.
+- **No dissolve on the silhouette.** There was one, and it withered the figure.
+  A forearm is about 30px across, so a 16px inward bite consumed the whole
+  limb and the calves and feet came out as loose confetti. It was also the
+  wrong edge to work: the artist drew this figure on near-black already, so the
+  silhouette is not a seam and needs no help. The frame is the only real join.
+- **The frame bands are narrow — 55px and 90px, not 300px and 190px.** The wide
+  versions reached the elbow and the knee. An arm eaten to the elbow is not a
+  dissolving edge, it is a withered arm. Same lesson on the background plates,
+  where the band went from a fifth of the width to a tenth.
+- **The cream wedge is fitted, not eyeballed.** The source sits on a cream
+  triangle in the lower right. `WEDGE_B/WEDGE_M` come from a least-squares fit
+  over the last run of cream in each column, and that diagonal is the second
+  edge dissolved.
+
+Everything else in that frame — around 400 connected runs of captions, barcodes
+and a pair of dice — is dropped. The page sets its own type, in two sizes.
+
+The scatter is seeded (`SEED = 7`), so a rebuild is stable and the composition
+doesn't re-roll under you.
+
+```bash
+python3 assets/make_icarus.py    # all five assets, ~510 KB total
+```
+
+## The cosmos
+
+One `.cosmos` layer, absolute inside `body`, as tall as the whole document.
+
+- **Eleven planets**, all cut from the hero's own frame (`planet.webp` — the
+  ringed body was the second-largest run in that image). Cropped to the body
+  and padded square: the run's own bounding box is mostly empty, because the
+  ring streaks a long way right and a sliver of the figure's leg sits in the
+  same box, so a sprite boxed that way rendered the disc at half the width CSS
+  asked for and read as a dot with a dash. The crop now comes off the body,
+  eroded until the few-pixel streak is gone, and the alpha is masked by the run
+  itself so nothing else leaks in. Sizes 10–48px, drifting on 22–47s cycles.
+- **Three ghosted plates** from the other two covers, cropped to windows that
+  miss every line of the covers' own type, so nothing had to be painted out.
+- **Six glitch streaks** on `steps(1)`.
+
+Three things worth knowing:
+
+- **Absolute, not fixed.** Fixed planets sit still while the page moves under
+  them and read as dirt on the screen. These belong to the document.
+- **No `overflow:hidden` on the layer.** It's several thousand pixels tall once
+  a filing renders, and clipping it makes one paint area that size for every
+  drifting planet to invalidate. Overflow-x on the root already clips the
+  plates that hang off the sides. Every animated child gets `will-change:
+  transform` so it composites instead of repainting its parent.
+- **The plates' opacity ceiling is measured.** Flat 7% is the most either plate
+  can carry directly behind `--dim` body text without dropping it under 4.5:1.
+  They run at 13% with a mask that dies before the reading column, which is
+  what makes the higher number legal — where a plate can reach text it's back
+  near 3%. The mask is stepped in six hard stops, not smooth: a gradient
+  falloff is the soft feather this whole page refuses. Below `52rem` there is
+  no outer margin left to hide in, so the whole layer drops to 55%.
+
+Planets are kept past ~18% and before ~78% of the width on wide screens. One
+crossing a hairline rule stops reading as a distant body and starts reading as
+dirt.
+
+## The motif at hairline scale
+
+`.rule` is the same move: a 1px rule with a band of 5px squares above it,
+thinning at both ends. Two `mask-image` layers — a horizontal ramp over the
+dotted band, a solid strip over the hairline — so only the dots dissolve and the
+rule stays full width.
+
+It's a `<div>`, not an `<hr>`. Generated content on `<hr>` silently fails to
+paint in this engine despite computing a non-none value; `v3` hit the same trap.
+
+The favicon is the edge again at 64px: a cream block whose left side breaks into
+the matrix. A figure is grey mush at that size, so the mark is the effect.
+
+## Motion
+
+- **One authored moment:** a scan sweeps down the figure once on load and is
+  then gone for good. A real `mask-position` animation, not an overlay fade.
+- **Quiet and permanent:** the planets drift; the streaks jump on `steps(1)`.
+  Stepped on purpose — a glitch doesn't ease, and an eased streak reads as a
+  loading bar.
+- `prefers-reduced-motion` kills all of it.
+
+## The CTA
+
+One small hairline rectangle, no fill, no second button. The ticker field lives
+*inside* it, so the whole page has exactly one control. Hover inverts the submit
+half to cream — the single inversion in the world.
+
+No rounded corners anywhere, no shadows, no gradient on any ground, no cards.
+
+## Narrow screens
+
+Below `52rem` the hero figure stops being a layer behind the copy and becomes a
+real grid row above it. Overlapping display type onto the artwork fails contrast
+at any opacity, and dimming the artwork to rescue the text ruins the one thing
+the page is built around. It still bleeds off the top and the right, and its own
+bottom edge is a pixel matrix, so the join is still the effect.
 
 ## Type
 
-Six variable woff2 files in `assets/fonts`, ~130KB total, self-hosted from
-Google Fonts. No network calls at runtime.
+Two faces from `assets/fonts`, self-hosted from Google Fonts. No network calls
+at runtime.
 
-`v3` sets Libre Caslon Display against Libre Franklin, which carries only the
-tracked uppercase labels.
+- **Libre Caslon Display** — everything that speaks: headline, values, entry
+  titles, section prose.
+- **Libre Franklin** — only at 10px, 600, tracked `.2em`, uppercase.
 
-## The other two directions
+Nothing in between those two. System monospace appears for file paths, KB
+figures, the second counter and the shell command — data and measurement, not a
+costume.
 
-`v1-neoclassical.html` and `v2-editorial.html` are the directions that weren't
-chosen. They're the design only — no ticker box, no extractor behind them.
-Kept for reference; nothing else points at them.
+The other four woff2 files in `assets/fonts` belong to `v1` and `v2`.
+
+## The other three directions
+
+`index.html` lists all four. `v1-neoclassical.html`, `v2-editorial.html` and
+`v3-letterpress.html` are the design only — `serve.py`'s `HOME` now points at
+`v4`, so their ticker boxes have no route behind them. Kept for reference.
+
+`v3` owns `assets/hero.jpg` (the Acropolis stipple engraving) and
+`assets/bg-mosaic.png` (Paestum as a colour ASCII mosaic, `make_mosaic.py`, with
+`src_canvas.jpg` and `src_temple.jpg` as inputs). All still on disk, all still
+used by `v3`, none referenced by `v4`.
+
+## Still on the old world
+
+`assets/app.icns` and `assets/favicon.png` are ink-on-paper, drawn for the
+letterpress direction by `assets/make_icon.py` and installed by `../make_app.sh`.
+The site now uses `assets/favicon-icarus.png`, but **the macOS app icon has not
+been redrawn** — it will sit in the Dock looking like a different product until
+it is.

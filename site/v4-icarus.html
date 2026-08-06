@@ -1,0 +1,987 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>10K AI — the 10-K, taken apart</title>
+<meta name="description" content="Give it a ticker, get the 10-K and everything useful inside it. Every Item as its own file, the as-filed statements, ten years of financials, and a diff of this year's risks against last year's. All from SEC EDGAR.">
+<meta name="theme-color" content="#222222">
+<link rel="icon" href="assets/favicon-icarus.png" type="image/png">
+<link rel="preload" as="image" href="assets/icarus.webp" fetchpriority="high">
+
+<style>
+/* ---- faces ------------------------------------------------------------- */
+@font-face{font-family:"Libre Caslon Display";src:url("assets/fonts/libre-caslon-display.woff2") format("woff2");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Libre Franklin";src:url("assets/fonts/libre-franklin.woff2") format("woff2");font-weight:300 700;font-style:normal;font-display:swap}
+
+/* The whole page is one near-black ground. Not pure black: #222222 still
+   reads as black on screen but leaves the painting's flesh tones somewhere to
+   sit — on #000 they go muddy and the figure looks pasted on. Every warm value
+   on the page belongs to the artwork or the type, nothing else. */
+:root{
+  --void:#222222;
+  --cream:#EFD5C8;   /* 11.4:1 — display type, values, the hairline button */
+  --dim:#B79C8D;     /*  6.2:1 — body text                                 */
+  --faint:#A98D7D;   /*  5.2:1 — tracked micro labels, placeholders        */
+  --umber:#5F4F45;   /*  2.0:1 — rules and the bar. Never carries a word.  */
+  --alarm:#E28C74;
+  --hair:rgba(239,213,200,.15);
+
+  --serif:"Libre Caslon Display","Baskerville","Times New Roman",serif;
+  --sans:"Libre Franklin",-apple-system,"Helvetica Neue",Arial,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+
+  --pad:clamp(1.15rem,4.5vw,3.25rem);
+  --measure:56rem;
+}
+*,*::before,*::after{box-sizing:border-box}
+/* clip on <html>, not on <body>. overflow-x on the body makes the body its own
+   scrollport, which changes what a document-height absolute child resolves
+   against and leaves .cosmos fighting the page for paint. */
+html{-webkit-text-size-adjust:100%;overflow-x:clip}
+body{
+  /* relative so .cosmos can be absolute over the *document*, not the viewport */
+  position:relative;overflow-x:clip;
+  margin:0;background:var(--void);color:var(--dim);
+  font-family:var(--sans);font-size:15px;
+  font-synthesis-weight:none;-webkit-font-smoothing:antialiased;
+}
+img{display:block;max-width:100%}
+a{color:inherit}
+::selection{background:var(--cream);color:var(--void)}
+:focus-visible{outline:1.5px solid var(--cream);outline-offset:3px}
+
+/* one tracked micro size for every label on the page — the plate allows the
+   display serif and this, and nothing in between */
+.micro{
+  font-family:var(--sans);font-weight:600;
+  font-size:.625rem;letter-spacing:.22em;text-transform:uppercase;
+  color:var(--faint);
+}
+
+/* ---- top edge ---------------------------------------------------------- */
+.top{
+  position:absolute;top:0;left:0;right:0;z-index:4;
+  display:flex;align-items:baseline;gap:clamp(1rem,3vw,2.25rem);
+  padding:clamp(1.1rem,2.6vh,1.8rem) var(--pad);
+}
+.top .wordmark{
+  font-family:var(--serif);font-size:.9375rem;letter-spacing:.2em;
+  color:var(--cream);text-transform:uppercase;
+}
+.top nav{display:flex;gap:clamp(.9rem,2.4vw,1.75rem)}
+.top nav a{text-decoration:none;transition:color .2s}
+.top nav a:hover{color:var(--cream)}
+
+/* ---- the hero ---------------------------------------------------------- */
+.hero{
+  position:relative;isolation:isolate;overflow:hidden;
+  min-height:min(100svh,58rem);
+  display:grid;align-items:end;
+  padding:clamp(7rem,16vh,10rem) var(--pad) clamp(2.4rem,7vh,4.5rem);
+}
+
+/* The figure fills the right side and bleeds off the top and the bottom. It is
+   the only thing on the page allowed to touch three edges.
+
+   No mask here on purpose. Every edge where the plate is cut — the left frame
+   and the diagonal along the bottom — already ends in a scattered matrix of
+   square pixels, baked in by assets/make_icarus.py. A CSS gradient mask over
+   the top would only put a soft feather back on the join it exists to show.
+
+   Sized off the viewport height, not its width. The figure has to keep the
+   same presence on a 21:9 monitor as on a laptop, and a percentage width does
+   the opposite: it inflates the crop until only a chest fills the frame. */
+.hero__art{
+  position:absolute;top:-5%;bottom:-5%;right:0;z-index:-1;
+  width:min(54%,84svh);pointer-events:none;
+}
+.hero__art img{
+  width:100%;height:100%;object-fit:cover;object-position:44% 26%;
+  animation:plate-in 1.5s cubic-bezier(.16,1,.3,1) both;
+}
+/* one pass of the scan, on load only, then it is gone for good */
+.hero__art::after{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:repeating-linear-gradient(180deg,rgba(239,213,200,.16) 0 2px,transparent 2px 10px);
+  -webkit-mask-image:linear-gradient(180deg,transparent,#000 45%,transparent);
+          mask-image:linear-gradient(180deg,transparent,#000 45%,transparent);
+  -webkit-mask-size:100% 46%;mask-size:100% 46%;
+  -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
+  animation:scan 2.6s cubic-bezier(.22,1,.36,1) .2s both;
+}
+@keyframes plate-in{
+  from{opacity:0;transform:translateX(2.2rem) scale(1.03)}
+  to  {opacity:1;transform:none}
+}
+@keyframes scan{
+  from{-webkit-mask-position:0 -60%;mask-position:0 -60%;opacity:1}
+  to  {-webkit-mask-position:0 160%;mask-position:0 160%;opacity:0}
+}
+
+/* ---- the cosmos: one layer behind the whole document ------------------- */
+/* Not fixed. Fixed planets sit still while the page moves under them and read
+   as dirt on the screen; these are absolute inside the body, so they belong to
+   the document and travel with it.
+
+   No overflow:hidden here either. This layer is as tall as the document —
+   several thousand pixels once a filing renders — and clipping it makes one
+   paint area that size for every drifting planet to invalidate. The plates
+   that hang off the sides are already clipped by overflow-x on the root. */
+.cosmos{
+  position:absolute;inset:0;z-index:-1;
+  pointer-events:none;
+}
+
+.planet{
+  position:absolute;
+  /* the sprite is the body alone, cropped square, so width is the disc */
+  aspect-ratio:1;
+  background:url("assets/planet.webp") center/contain no-repeat;
+  animation:drift 34s ease-in-out infinite alternate;
+  will-change:transform;      /* own compositor layer, not a parent repaint */
+}
+/* Kept to the outer margins. The reading column is 56rem centred, so on a wide
+   screen everything past ~18% and before ~78% is clear of it — a planet that
+   crosses a hairline rule stops reading as a distant body and starts reading
+   as dirt on the screen. The two that do sit inside are small and dim. */
+/* Sizes are the disc now, not a box the disc sat in a corner of, so they are
+   roughly half what they were. Capped at 48px: the source body is 74px across
+   and nothing here is worth upscaling past its own resolution. */
+.planet:nth-of-type(1){width:44px;left:4%;top:7%;opacity:.5}
+.planet:nth-of-type(2){width:16px;left:83%;top:13%;opacity:.6;animation-duration:26s}
+.planet:nth-of-type(3){width:28px;left:10%;top:22%;opacity:.34;animation-duration:41s}
+.planet:nth-of-type(4){width:11px;left:47%;top:29%;opacity:.34;animation-duration:22s}
+.planet:nth-of-type(5){width:48px;left:80%;top:37%;opacity:.26;animation-duration:47s}
+.planet:nth-of-type(6){width:20px;left:5%;top:46%;opacity:.44;animation-duration:29s}
+.planet:nth-of-type(7){width:34px;left:85%;top:55%;opacity:.3;animation-duration:38s}
+.planet:nth-of-type(8){width:13px;left:12%;top:64%;opacity:.5;animation-duration:24s}
+.planet:nth-of-type(9){width:40px;left:79%;top:72%;opacity:.28;animation-duration:44s}
+.planet:nth-of-type(10){width:10px;left:55%;top:81%;opacity:.3;animation-duration:31s}
+.planet:nth-of-type(11){width:24px;left:6%;top:89%;opacity:.34;animation-duration:36s}
+@keyframes drift{from{transform:translate3d(0,0,0)}to{transform:translate3d(2.4rem,-1.4rem,0)}}
+
+/* The other two plates, ghosted in behind the page.
+   Flat 7% everywhere was safe but invisible; 13% with a mask that dies before
+   the reading column is both. The measured ceiling is the point — at 13% flat,
+   the brightest pixel in either plate lifts #222222 far enough that --dim body
+   text drops under 4.5:1, so the mask is what makes the higher opacity legal,
+   not a taste call. Where a plate can reach text it is down near 3%.
+
+   Stepped, not smooth. A gradient falloff is the soft feather this whole page
+   refuses; six hard stops read as the same matrix everything else ends in. */
+.plate{
+  position:absolute;
+  width:clamp(19rem,46vw,44rem);aspect-ratio:760/920;
+  background:center/contain no-repeat;
+  opacity:.13;
+}
+.plate--fallen,.plate--fallen2{background-image:url("assets/plate-fallen.webp")}
+.plate--icarus{background-image:url("assets/plate-icarus.webp")}
+
+.plate--fallen,.plate--fallen2{
+  -webkit-mask-image:linear-gradient(90deg,transparent 0 16%,rgba(0,0,0,.18) 16% 33%,rgba(0,0,0,.42) 33% 50%,rgba(0,0,0,.68) 50% 67%,rgba(0,0,0,.86) 67% 84%,#000 84%);
+          mask-image:linear-gradient(90deg,transparent 0 16%,rgba(0,0,0,.18) 16% 33%,rgba(0,0,0,.42) 33% 50%,rgba(0,0,0,.68) 50% 67%,rgba(0,0,0,.86) 67% 84%,#000 84%);
+}
+.plate--icarus{
+  -webkit-mask-image:linear-gradient(90deg,#000 0 16%,rgba(0,0,0,.86) 16% 33%,rgba(0,0,0,.68) 33% 50%,rgba(0,0,0,.42) 50% 67%,rgba(0,0,0,.18) 67% 84%,transparent 84%);
+          mask-image:linear-gradient(90deg,#000 0 16%,rgba(0,0,0,.86) 16% 33%,rgba(0,0,0,.68) 33% 50%,rgba(0,0,0,.42) 50% 67%,rgba(0,0,0,.18) 67% 84%,transparent 84%);
+}
+
+.plate--fallen{right:-9%;top:28%}
+.plate--icarus{left:-11%;top:55%}
+.plate--fallen2{right:-6%;top:81%;width:clamp(15rem,32vw,30rem)}
+
+.streak{
+  position:absolute;height:1px;background:var(--cream);
+  animation:slip 9s steps(1,end) infinite;
+  will-change:transform;
+}
+.streak:nth-of-type(1){width:13%;left:4%;top:12%;opacity:.18}
+.streak:nth-of-type(2){width:7%;left:56%;top:6%;opacity:.22;height:2px;animation-duration:13s;animation-delay:-4s}
+.streak:nth-of-type(3){width:18%;left:12%;top:20%;opacity:.11;animation-duration:17s;animation-delay:-9s}
+.streak:nth-of-type(4){width:9%;left:70%;top:45%;opacity:.14;animation-duration:21s;animation-delay:-2s}
+.streak:nth-of-type(5){width:15%;left:6%;top:69%;opacity:.1;animation-duration:15s;animation-delay:-11s}
+.streak:nth-of-type(6){width:6%;left:52%;top:88%;opacity:.16;height:2px;animation-duration:19s;animation-delay:-6s}
+/* steps(1) so it jumps between positions instead of gliding — a glitch does
+   not ease, and an eased streak reads as a loading bar */
+@keyframes slip{
+  0%,58%{transform:translateX(0)}
+  60%{transform:translateX(-2.4rem) scaleX(.4)}
+  62%,88%{transform:translateX(1.1rem)}
+  90%{transform:translateX(-.5rem) scaleX(1.6)}
+  92%,100%{transform:translateX(0)}
+}
+
+/* the one muted bar, bottom right */
+.hero__bar{
+  position:absolute;right:0;bottom:0;
+  width:clamp(6rem,15vw,15rem);height:6px;background:var(--umber);
+}
+
+/* ---- the copy, stacked low on the left --------------------------------- */
+/* 46%, not 50%: the art column is 46% of the width once the viewport is short
+   enough for min() to pick the percentage, and at ~900px the two boxes meet */
+.hero__copy{max-width:min(44ch,46%);position:relative;z-index:1}
+.hero__copy h1{
+  margin:0;font-family:var(--serif);font-weight:400;
+  font-size:clamp(2.4rem,5vw,4.5rem);
+  line-height:1.0;letter-spacing:-.015em;color:var(--cream);
+  max-width:11ch;
+}
+/* "10-K" is a name, not a hyphenated word — it must never break at the rule */
+.hero__copy h1 .nb{white-space:nowrap}
+.hero__copy .deck{
+  margin:clamp(1.3rem,3vh,1.9rem) 0 0;max-width:44ch;
+  font-size:.8125rem;line-height:1.7;color:var(--dim);
+}
+
+/* the CTA: one small hairline rectangle, no fill, no second button.
+   The ticker field lives inside it, so the page has exactly one control. */
+.cta{
+  display:flex;align-items:stretch;
+  margin:clamp(1.5rem,3.4vh,2.2rem) 0 0;
+  max-width:23rem;border:1px solid var(--cream);
+}
+.cta input{
+  flex:1 1 auto;min-width:0;
+  font-family:var(--serif);font-size:1rem;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--cream);
+  background:none;border:0;padding:.72rem .95rem;
+}
+.cta input::placeholder{color:var(--faint);letter-spacing:.06em;text-transform:none}
+.cta input:focus{outline:none}
+.cta input:disabled{opacity:.55}
+.cta button{
+  flex:none;cursor:pointer;
+  font-family:var(--sans);font-weight:600;
+  font-size:.625rem;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--cream);background:none;
+  border:0;border-left:1px solid var(--hair);
+  padding:.72rem 1.05rem;
+  transition:background-color .22s cubic-bezier(.22,1,.36,1),color .22s cubic-bezier(.22,1,.36,1);
+}
+.cta button:hover:not(:disabled){background:var(--cream);color:var(--void)}
+.cta button:disabled{color:var(--faint);cursor:default}
+.cta:focus-within{outline:1px solid var(--cream);outline-offset:2px}
+
+.hint{margin:.95rem 0 0;font-size:.75rem;line-height:1.6;color:var(--faint)}
+.hint button{
+  font:inherit;color:var(--cream);background:none;border:0;padding:0 .12em;
+  cursor:pointer;border-bottom:1px solid var(--hair);
+}
+.hint button:hover{border-bottom-color:var(--cream)}
+.hint code{font-family:var(--mono);font-size:.9em}
+
+/* Narrow: the figure becomes a real grid row above the copy instead of a layer
+   behind it. Overlapping display type onto flesh tones would fail contrast at
+   any opacity, and dimming the painting to rescue the text ruins the one thing
+   the page is built around. It still bleeds off the top and the right, and its
+   own bottom edge is a pixel matrix, so the join stays the effect. */
+@media (max-width:52rem){
+  /* Narrow screens have no outer margin to keep the field in — every planet
+     and plate is over the reading column by definition. One dimmer on the
+     whole layer, so the atmosphere survives and the text still wins. */
+  .cosmos{opacity:.55}
+
+  .hero{
+    grid-template-rows:minmax(9rem,1fr) auto;
+    padding-top:clamp(4.5rem,11vh,6rem);row-gap:clamp(1.5rem,4vh,2.5rem);
+  }
+  .hero__art{
+    position:relative;inset:auto;grid-row:1;justify-self:end;
+    width:min(66%,20rem);
+    margin:calc(-1 * clamp(4.5rem,11vh,6rem)) 0 0 0;
+    margin-right:calc(-1 * var(--pad));
+  }
+  .hero__copy{grid-row:2;max-width:none}
+  .hero__copy h1{max-width:10ch}
+  .hero__copy .deck{max-width:38ch}
+  .cta{max-width:none}
+}
+
+/* ---- the pixel rule ---------------------------------------------------- */
+/* The signature move, carried down the page: a hairline that breaks into the
+   same square matrix as the plate's cut edges and thins out at both ends.
+   Two mask layers — a horizontal ramp over the dotted band, and a solid strip
+   over the hairline — so only the dots dissolve. A <div>, not an <hr>: this
+   engine drops generated content on <hr> without computing it to none. */
+.rule{
+  height:7px;
+  background:
+    repeating-linear-gradient(90deg,var(--umber) 0 5px,transparent 5px 10px) 0 0/100% 5px no-repeat,
+    linear-gradient(var(--umber),var(--umber)) 0 100%/100% 1px no-repeat;
+  -webkit-mask-image:linear-gradient(90deg,transparent,#000 18%,#000 82%,transparent),linear-gradient(#000,#000);
+          mask-image:linear-gradient(90deg,transparent,#000 18%,#000 82%,transparent),linear-gradient(#000,#000);
+  -webkit-mask-size:100% 5px,100% 1px;mask-size:100% 5px,100% 1px;
+  -webkit-mask-position:0 0,0 100%;mask-position:0 0,0 100%;
+  -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
+}
+
+/* ---- status ------------------------------------------------------------ */
+.status{
+  max-width:var(--measure);margin:0 auto;padding:1.6rem var(--pad) 0;
+  font-size:.8125rem;line-height:1.6;color:var(--dim);min-height:1px;
+}
+.status:empty{padding:0}
+.status[data-tone="error"]{color:var(--alarm)}
+.status .tick{font-family:var(--mono);color:var(--cream)}
+
+/* ---- the filing -------------------------------------------------------- */
+.filing{max-width:var(--measure);margin:clamp(3rem,8vh,5.5rem) auto 0;padding:0 var(--pad)}
+.filing[hidden]{display:none}
+.filing__head h2{
+  margin:0 0 .5rem;font-family:var(--serif);font-weight:400;
+  font-size:clamp(1.7rem,3.6vw,2.6rem);line-height:1.1;
+  letter-spacing:-.01em;color:var(--cream);
+}
+.filing__head .sub{margin:0;font-size:.6875rem;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+.filing__head .src{margin:.55rem 0 0;font-size:.75rem;color:var(--dim)}
+.filing__head .src a{color:var(--cream);text-decoration:none;border-bottom:1px solid var(--hair)}
+.filing__head .src a:hover{border-bottom-color:var(--cream)}
+
+/* fixed tracks, not auto-fit: eight metrics must land on full rows or the
+   hairlines end mid-air where the empty cells would be */
+.metrics{
+  display:grid;grid-template-columns:repeat(2,1fr);gap:0;
+  margin:1.6rem 0 0;border-top:1px solid var(--hair);
+}
+@media (min-width:560px){.metrics{grid-template-columns:repeat(4,1fr)}}
+.metric{padding:1rem .5rem 1rem 0;border-bottom:1px solid var(--hair)}
+.metric dt{
+  font-size:.5625rem;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--faint);margin-bottom:.45rem;font-weight:600;
+}
+.metric dd{
+  margin:0;font-family:var(--serif);font-size:1.4rem;line-height:1.05;
+  color:var(--cream);font-variant-numeric:tabular-nums;
+}
+.metric .delta{
+  display:block;margin-top:.35rem;
+  font-family:var(--sans);font-size:.6875rem;letter-spacing:.02em;color:var(--dim);
+}
+/* a value the filer never tagged. Left visibly blank, never substituted. */
+.metric .none{color:var(--umber)}
+
+.filing h3{
+  margin:2.6rem 0 0;font-family:var(--sans);font-weight:600;
+  font-size:.625rem;letter-spacing:.22em;text-transform:uppercase;color:var(--faint);
+}
+
+.ftable{width:100%;border-collapse:collapse;font-size:.8125rem;margin-top:1.2rem}
+.ftable th,.ftable td{padding:.6rem .5rem;border-bottom:1px solid var(--hair);text-align:right}
+.ftable th:first-child,.ftable td:first-child{text-align:left;padding-left:0}
+.ftable th:last-child,.ftable td:last-child{padding-right:0}
+.ftable th{
+  font-family:var(--sans);font-weight:600;font-size:.5625rem;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--faint);
+}
+.ftable td{font-variant-numeric:tabular-nums;color:var(--dim)}
+.ftable td:first-child{color:var(--cream)}
+.ftable tbody tr:last-child td{border-bottom:none}
+
+.risk{margin-top:1.2rem;font-size:.875rem;line-height:1.6}
+.risk .tally{margin:0;color:var(--dim);font-size:.8125rem}
+.risk ul{margin:1rem 0 0;padding:0;list-style:none}
+.risk li{
+  padding:.8rem 0;border-bottom:1px solid var(--hair);
+  font-family:var(--serif);font-size:1rem;line-height:1.5;color:var(--cream);
+}
+.risk li:last-child{border-bottom:none}
+
+/* the three Items worth opening */
+.read{margin-top:1rem}
+.read details{border-bottom:1px solid var(--hair)}
+.read summary{
+  cursor:pointer;list-style:none;
+  display:grid;grid-template-columns:1fr auto;gap:.25rem 1.25rem;align-items:baseline;
+  padding:1.05rem 0;
+}
+.read summary::-webkit-details-marker{display:none}
+.read .no{
+  grid-column:1/-1;font-family:var(--sans);font-weight:600;font-size:.5625rem;
+  letter-spacing:.2em;text-transform:uppercase;color:var(--faint);
+}
+.read .title{font-family:var(--serif);font-size:1.15rem;line-height:1.25;color:var(--cream)}
+.read .kb{font-family:var(--mono);font-size:.75rem;color:var(--faint);white-space:nowrap}
+.read .sign::before{content:"+";margin-left:.6em;color:var(--cream)}
+.read details[open] .sign::before{content:"–"}
+.read .why{grid-column:1/-1;margin:.4rem 0 0;max-width:66ch;font-size:.8125rem;line-height:1.6;color:var(--dim)}
+.read .why em{color:var(--faint)}
+/* The section itself, set as prose rather than dumped as preformatted text.
+   The measure is the point: 66ch is readable, a 56rem line of 10-K prose is
+   not. Scrolled in place so the page keeps its shape. */
+.read .body{
+  margin:0 0 1.4rem;max-height:30rem;overflow:auto;
+  padding-top:1rem;border-top:1px solid var(--hair);
+}
+.read .body p{
+  margin:0 0 .9em;max-width:66ch;
+  font-family:var(--serif);font-size:.9375rem;line-height:1.65;color:var(--dim);
+  overflow-wrap:break-word;
+}
+.read .body h4{
+  margin:1.6em 0 .55em;max-width:66ch;
+  font-family:var(--sans);font-weight:600;font-size:.5625rem;
+  letter-spacing:.2em;text-transform:uppercase;color:var(--cream);
+}
+.read .body h4:first-child{margin-top:0}
+.read .body p.note{
+  font-family:var(--sans);font-size:.75rem;line-height:1.6;color:var(--faint);
+}
+/* condensed / full text, at the micro size so it never competes with the
+   drawer's own heading */
+.read .swap{
+  font-family:var(--sans);font-weight:600;font-size:.5625rem;
+  letter-spacing:.2em;text-transform:uppercase;color:var(--faint);
+  background:none;border:0;border-bottom:1px solid var(--hair);
+  padding:0 0 3px;margin:0 0 1.1rem;cursor:pointer;
+  transition:color .18s,border-color .18s;
+}
+.read .swap:hover{color:var(--cream);border-bottom-color:var(--cream)}
+
+/* paths like statements/consolidated_balance_sheets_parenthetical.json are
+   longer than any sensible column, so the name wraps and the size stays put */
+.files{margin-top:1.2rem;display:grid;grid-template-columns:repeat(auto-fill,minmax(20rem,1fr));gap:0 2rem}
+.files a{
+  display:flex;justify-content:space-between;gap:1rem;align-items:baseline;
+  padding:.5rem 0;border-bottom:1px solid var(--hair);
+  font-family:var(--mono);font-size:.75rem;color:var(--dim);text-decoration:none;
+  transition:color .18s;
+}
+.files a:hover{color:var(--cream)}
+.files .name{min-width:0;overflow-wrap:anywhere}
+.files .kb{color:var(--faint);flex:none;white-space:nowrap}
+.runstat{margin:1.6rem 0 0;font-family:var(--mono);font-size:.75rem;color:var(--faint)}
+
+/* ---- bands ------------------------------------------------------------- */
+.band{max-width:var(--measure);margin:0 auto;padding:clamp(5rem,13vh,9rem) var(--pad) 0}
+.band>h2{margin:0 0 1.4rem}
+.band .rule{margin-bottom:clamp(2rem,5vh,3rem)}
+
+.catalogue{display:grid}
+.entry{
+  display:grid;grid-template-columns:1fr;gap:.5rem;
+  padding:clamp(1.5rem,3.4vh,2.2rem) 0;border-bottom:1px solid var(--hair);
+}
+.entry:last-child{border-bottom:none}
+.entry h3{
+  order:1;margin:0;font-family:var(--serif);font-weight:400;
+  font-size:clamp(1.3rem,2.6vw,1.85rem);line-height:1.14;
+  letter-spacing:-.01em;color:var(--cream);
+}
+.entry .file{order:2;font-family:var(--mono);font-size:.6875rem;letter-spacing:.04em;color:var(--faint)}
+.entry p{order:3;margin:0;font-size:.9375rem;line-height:1.65;color:var(--dim);max-width:64ch}
+@media (min-width:48rem){
+  .entry{grid-template-columns:11rem 1fr;column-gap:clamp(1.5rem,4vw,3rem)}
+  .entry .file{grid-row:1/4;grid-column:1;padding-top:.55rem}
+  .entry h3,.entry p{grid-column:2}
+}
+
+.statement{display:grid;gap:clamp(2.2rem,5vh,3.2rem)}
+.statement h3{
+  margin:0 0 .7rem;font-family:var(--sans);font-weight:600;
+  font-size:.625rem;letter-spacing:.22em;text-transform:uppercase;color:var(--faint);
+}
+.statement p{
+  margin:0;font-family:var(--serif);font-weight:400;
+  font-size:clamp(1.05rem,1.8vw,1.3rem);line-height:1.55;
+  color:var(--cream);max-width:60ch;
+}
+
+/* ---- close ------------------------------------------------------------- */
+.close{
+  max-width:var(--measure);margin:clamp(5rem,13vh,9rem) auto 0;
+  padding:0 var(--pad) clamp(3rem,8vh,5rem);
+}
+.close .rule{margin-bottom:1.6rem}
+.close .name{
+  font-family:var(--serif);font-size:1.05rem;letter-spacing:.2em;
+  text-transform:uppercase;color:var(--cream);margin:0 0 .6rem;
+}
+.close p{margin:0;font-size:.75rem;line-height:1.7;color:var(--faint);max-width:60ch}
+.close a{color:var(--dim);text-decoration:none;border-bottom:1px solid var(--hair)}
+.close a:hover{color:var(--cream)}
+
+/* ---- entrance ---------------------------------------------------------- */
+@keyframes rise{
+  from{opacity:0;transform:translateY(1rem);filter:blur(9px)}
+  to  {opacity:1;transform:none;filter:blur(0)}
+}
+.hero__copy>*{animation:rise 1.15s cubic-bezier(.16,1,.3,1) both}
+.hero__copy .deck{animation-delay:.1s}
+.hero__copy .cta{animation-delay:.18s}
+.hero__copy .hint{animation-delay:.24s}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition-duration:.01ms!important}
+}
+
+</style>
+</head>
+<body>
+<!--
+THESIS: A DeFi-plate composition borrowed for a filings tool — one full-bleed
+  near-black hero, a public-domain oil painting bleeding off three edges, and
+  the join between the painting and the software left visible as a matrix of
+  square pixels rather than hidden behind a mask or a feather.
+OWN-WORLD: #222222 ground everywhere, #EFD5C8 Libre Caslon Display for
+  everything that speaks, Libre Franklin only at 10px and tracked, one muted
+  #5F4F45 bar, hairline rules that break into the same pixel matrix as the
+  plate is cut. No fills, no gradients on the ground, no rounded
+  corners, no cards.
+STORY: Visitor learns in one line that a ticker becomes a dismantled 10-K,
+  types one into the single hairline control, and reads the filing on the same
+  ground the figure stands on.
+FIRST VIEWPORT: figure right, cropped by the top and bottom edges, its wing
+  streaking into chroma and its cut edges dissolving into square pixels;
+  headline stacked low left; two small lines under it; one hairline rectangle;
+  dim spheres and glitch cuts drifting across the dark left side.
+FORM: classical-glitch. Pinned by the user from the Icarus plate.
+-->
+
+<header class="top">
+  <span class="wordmark">10K&nbsp;AI</span>
+  <nav class="micro">
+    <a href="#output">What lands</a>
+    <a href="#approach">How it works</a>
+  </nav>
+</header>
+
+<div class="cosmos" aria-hidden="true">
+  <i class="planet"></i><i class="planet"></i><i class="planet"></i>
+  <i class="planet"></i><i class="planet"></i><i class="planet"></i>
+  <i class="planet"></i><i class="planet"></i><i class="planet"></i>
+  <i class="planet"></i><i class="planet"></i>
+  <i class="plate plate--fallen"></i>
+  <i class="plate plate--icarus"></i>
+  <i class="plate plate--fallen2"></i>
+  <i class="streak"></i><i class="streak"></i><i class="streak"></i>
+  <i class="streak"></i><i class="streak"></i><i class="streak"></i>
+</div>
+
+<main>
+<section class="hero">
+  <div class="hero__art" aria-hidden="true">
+    <img src="assets/icarus.webp" width="928" height="1074" fetchpriority="high"
+         alt="">
+  </div>
+
+  <div class="hero__copy">
+    <h1><span class="nb">The 10-K,</span> taken apart</h1>
+    <p class="deck">Give it a ticker. Every Item comes back as its own file, the statements as filed, ten years of financials, and this year's risks diffed against last year's.</p>
+
+    <form class="cta" id="run-form" autocomplete="off">
+      <input id="ticker" name="ticker" type="text" placeholder="Ticker"
+             maxlength="10" spellcheck="false" autocapitalize="characters"
+             aria-label="Ticker symbol" required>
+      <button type="submit" id="run-btn"><span class="pill__label">Pull the filing</span></button>
+    </form>
+
+    <p class="hint">
+      Straight from SEC EDGAR — no key, no quota. Try
+      <button type="button" data-fill="AAPL">AAPL</button>,
+      <button type="button" data-fill="NVDA">NVDA</button>,
+      <button type="button" data-fill="JPM">JPM</button> or
+      <button type="button" data-fill="BRK.B">BRK.B</button>.
+      From a terminal: <code>./run_10k.sh AAPL</code>
+    </p>
+  </div>
+
+  <span class="hero__bar" aria-hidden="true"></span>
+</section>
+
+<p class="status" id="status" role="status" aria-live="polite"></p>
+
+<section class="filing" id="filing" hidden aria-live="polite"></section>
+
+<section class="band" id="output">
+  <h2 class="micro">What lands in the folder</h2>
+  <div class="rule" role="presentation"></div>
+  <div class="catalogue">
+    <article class="entry">
+      <h3>The one file to open first</h3>
+      <span class="file">SUMMARY.md</span>
+      <p>Company identifiers, the latest year's numbers, revenue and EPS history, the risk-diff headline, and an index of everything else.</p>
+    </article>
+    <article class="entry">
+      <h3>All ten Items, split out</h3>
+      <span class="file">sections/</span>
+      <p>Business, risk factors, MD&amp;A, legal proceedings, market risk, financial statements — each one its own file, so you read the section instead of the whole document.</p>
+    </article>
+    <article class="entry">
+      <h3>The statements, as filed</h3>
+      <span class="file">statements/</span>
+      <p>Income statement, balance sheet, cash flow and equity, taken from the filing itself rather than a vendor's normalisation. Markdown and JSON.</p>
+    </article>
+    <article class="entry">
+      <h3>Ten years, with the sourcing shown</h3>
+      <span class="file">trends.md</span>
+      <p>Margins, free cash flow, ROE, CAGR and share count across a decade — plus a note on which XBRL concepts fed each row and which were tried and not found.</p>
+    </article>
+    <article class="entry">
+      <h3>What the whole thing is worth</h3>
+      <span class="file">valuation.md</span>
+      <p>The share count three ways — cover page, weighted-average diluted, and fully diluted with options and unvested RSUs from the footnote — then market cap, the enterprise value bridge, EBIT, EBITDA and the multiples.</p>
+    </article>
+    <article class="entry">
+      <h3>What changed in the risks</h3>
+      <span class="file">risk_diff.md</span>
+      <p>Risks added, removed and reworded against last year. Every added risk prints beside its closest dropped counterpart with a similarity score, and a wholesale rewrite gets flagged at the top.</p>
+    </article>
+  </div>
+</section>
+
+<section class="band" id="approach">
+  <h2 class="micro">How it works</h2>
+  <div class="rule" role="presentation"></div>
+  <div class="statement">
+    <div>
+      <h3>No key, no quota, no cost</h3>
+      <p>Everything comes from SEC EDGAR, and nothing comes from anywhere else. A full extraction is about seventeen requests and fifteen seconds cold, then instant — filings are immutable once accepted, so the cache never expires. Even the share price is the filing's own, implied by the cover page rather than fetched from a quote feed, so nothing here moves after the filing date.</p>
+    </div>
+    <div>
+      <h3>No model touches the filing</h3>
+      <p>The tool extracts and structures, nothing else. Reading is yours to do, or your agent's, with the source text sitting right there to check against.</p>
+    </div>
+    <div>
+      <h3>Missing stays missing</h3>
+      <p>Banks have no gross profit line. Berkshire doesn't tag diluted EPS undimensioned. A blank stays blank and the file says what was tried, rather than quietly substituting something close.</p>
+    </div>
+  </div>
+</section>
+
+<footer class="close">
+  <div class="rule" role="presentation"></div>
+  <p class="name">10K AI</p>
+  <!-- The three plates were supplied, not sourced, so there is no attribution
+       to print here yet. Do not guess one: an invented credit is worse than
+       none. Fill this in before the site goes anywhere public. -->
+  <p>Data from SEC EDGAR. Extraction only — not investment advice.</p>
+</footer>
+</main>
+
+<script>
+(function(){
+  const form   = document.getElementById('run-form');
+  const input  = document.getElementById('ticker');
+  const btn    = document.getElementById('run-btn');
+  const label  = btn.querySelector('.pill__label');
+  const status = document.getElementById('status');
+  const out    = document.getElementById('filing');
+
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  // A tagged value the company never reported stays blank. Never substitute
+  // something close — that is the whole promise of the tool.
+  const none = '<span class="none">—</span>';
+  const num  = (v, dp) => v == null ? none
+    : Number(v).toLocaleString('en-US', {minimumFractionDigits: dp||0, maximumFractionDigits: dp||0});
+  const pct  = v => v == null ? none : (v > 0 ? '+' : '') + v.toFixed(1) + '%';
+  const usdM = v => v == null ? none : '$' + num(v, 0) + 'M';
+
+  // The three Items that carry the story the numbers can't. Item 8 used to sit
+  // here and no longer does: it is the statements and their notes, which this
+  // page already renders as tables and links as files — a second copy of them
+  // as 200 KB of prose was the least-read drawer on the page.
+  const READING = [
+    ['item1_business', 'Item 1', 'Business',
+     'What the company actually does — products, customers, segments, competition. Start here if the company is new to you. Answers “how does this thing make money?”'],
+    ['item1a_risk_factors', 'Item 1A', 'Risk Factors',
+     'Everything that could go wrong, in the company’s own words. Much is boilerplate, but the first few risks and anything company-specific are worth reading. New risks added since last year are a tell — see the diff above.'],
+    ['item7_mdna', 'Item 7', 'Management’s Discussion &amp; Analysis',
+     'Management explains the results in plain English — why revenue moved, what drove margins, what they expect. The most information-dense narrative in the filing. Read it closely.'],
+  ];
+
+  // A line that continues the one above rather than starting something new.
+  // Section text comes out of the filing one line per inline element, so a
+  // single sentence arrives split around every superscript ® — dumping that
+  // straight onto the page is what made the old drawers unreadable. Same rule
+  // the extractor's condenser uses.
+  const CONTINUES = /^[a-z(\[«"'’“”®™°,;:.)\-–—%$&/]/;
+
+  function paragraphs(text){
+    const out = [];
+    text.split('\n').map(l => l.trim()).filter(Boolean).forEach(line => {
+      if (out.length && CONTINUES.test(line)) out[out.length - 1] += ' ' + line;
+      else out.push(line);
+    });
+    return out;
+  }
+
+  // The condensed file is markdown: "## " for a heading, "_..._" for the note
+  // at the top, everything else a paragraph. The full section file has neither,
+  // so one renderer handles both.
+  function prose(text){
+    return paragraphs(text)
+      .filter(l => !l.startsWith('# '))
+      .map(l => l.startsWith('## ') ? '<h4>' + esc(l.slice(3)) + '</h4>'
+              : /^_.+_$/.test(l)    ? '<p class="note">' + esc(l.slice(1, -1)) + '</p>'
+              :                       '<p>' + esc(l) + '</p>')
+      .join('');
+  }
+
+  function reading(d){
+    const by = {};
+    (d.files || []).forEach(f => { by[f.name] = f; });
+    const blocks = READING.map(([stem, no, title, why]) => {
+      const full = by['sections/' + stem + '.md'];
+      if (!full) return '';   // a filer that didn't file this Item gets no drawer
+      // Extractions from before the condenser have no summaries/ file; those
+      // drawers open on the full section instead of showing an empty one.
+      const brief = by['summaries/' + stem + '.md'];
+      const first = brief || full;
+      return '<details><summary>' +
+        '<span class="no">' + no + '</span>' +
+        '<span class="title">' + title + '</span>' +
+        '<span class="kb">' + full.kb + ' KB<span class="sign"></span></span>' +
+        '<span class="why">' + why + '</span>' +
+        '</summary><div class="body"' +
+          ' data-brief="' + esc(brief ? brief.href : '') + '"' +
+          ' data-full="' + esc(full.href) + '"' +
+          ' data-src="' + esc(first.href) + '"><p>Loading…</p></div></details>';
+    }).join('');
+    return blocks
+      ? '<h3>The three sections worth reading</h3><div class="read">' + blocks + '</div>'
+      : '';
+  }
+
+  async function load(body){
+    const src = body.dataset.src;
+    if (body.dataset.loaded === src) return;
+    try {
+      const r = await fetch(src);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const text = await r.text();
+      const swap = body.dataset.brief && body.dataset.brief !== body.dataset.full
+        ? '<button type="button" class="swap">' +
+            (src === body.dataset.brief ? 'Read the full section' : 'Back to the condensed version') +
+          '</button>'
+        : '';
+      body.innerHTML = swap + prose(text);
+      body.dataset.loaded = src;
+      body.scrollTop = 0;
+      const button = body.querySelector('.swap');
+      if (button) button.addEventListener('click', () => {
+        body.dataset.src = src === body.dataset.brief ? body.dataset.full : body.dataset.brief;
+        load(body);
+      });
+    } catch (err) {
+      body.dataset.loaded = '';
+      body.innerHTML = '<p>Could not load this section — it is still on disk at ' +
+        esc(src) + '</p>';
+    }
+  }
+
+  // fetched on first open, not on render: Item 1A alone runs to 70 KB and most
+  // visits never open it
+  function wireReading(){
+    out.querySelectorAll('.read details').forEach(dt => {
+      dt.addEventListener('toggle', () => {
+        if (dt.open) load(dt.querySelector('.body'));
+      });
+    });
+  }
+
+  function metric(term, value, delta){
+    return '<div class="metric"><dt>' + esc(term) + '</dt><dd>' + value +
+      (delta ? '<span class="delta">' + delta + '</span>' : '') + '</dd></div>';
+  }
+
+  // Four fixed tracks, so a count that isn't a multiple of four leaves empty
+  // cells — and an empty cell has no bottom hairline, which ends the rule
+  // mid-air. Pad the row out instead.
+  function grid(cells){
+    const pad = (4 - cells.length % 4) % 4;
+    return '<dl class="metrics">' + cells.join('') +
+      '<div class="metric"></div>'.repeat(pad) + '</dl>';
+  }
+
+  function render(d){
+    const L = d.latest, parts = [];
+
+    parts.push(
+      '<div class="filing__head">' +
+        '<h2>' + esc(d.company || d.ticker) + '</h2>' +
+        '<p class="sub">' + esc(d.ticker) + ' · FY ended ' + esc(d.period) +
+          ' · filed ' + esc(d.filed) + (d.sic ? ' · ' + esc(d.sic) : '') + '</p>' +
+        '<p class="src">CIK ' + esc(d.cik) + (d.auditor ? ' · audited by ' + esc(d.auditor) : '') +
+          ' · <a href="' + esc(d.source_url) + '" target="_blank" rel="noopener noreferrer">filing on SEC.gov</a></p>' +
+      '</div>');
+
+    const sh = v => v == null ? none : num(v / 1e6, 1) + 'M';
+
+    parts.push(grid([
+      metric('Revenue',      usdM(L.revenue_m),  L.revenue_growth_pct == null ? '' : pct(L.revenue_growth_pct) + ' YoY'),
+      metric('Gross margin', L.gross_margin_pct == null ? none : L.gross_margin_pct.toFixed(1) + '%'),
+      metric('Op. margin',   L.operating_margin_pct == null ? none : L.operating_margin_pct.toFixed(1) + '%'),
+      metric('Net income',   usdM(L.net_income_m), L.net_margin_pct == null ? '' : L.net_margin_pct.toFixed(1) + '% margin'),
+      metric('EPS diluted',  L.eps == null ? none : '$' + L.eps.toFixed(2), L.eps_growth_pct == null ? '' : pct(L.eps_growth_pct) + ' YoY'),
+      metric('Free cash flow', usdM(L.fcf_m), L.fcf_margin_pct == null ? '' : L.fcf_margin_pct.toFixed(1) + '% margin'),
+      metric('ROE',          L.roe_pct == null ? none : L.roe_pct.toFixed(1) + '%'),
+      metric('Total debt',   usdM(L.total_debt_m), L.net_cash_m == null ? '' : (L.net_cash_m >= 0 ? 'net cash ' : 'net debt ') + usdM(Math.abs(L.net_cash_m))),
+    ]));
+
+    // The rest of the line items a valuation model asks for. Every one of them
+    // is as filed; a blank means the filer never tagged it.
+    parts.push('<h3>The rest of the numbers, as filed</h3>' + grid([
+      metric('Operating income', usdM(L.operating_income_m)),
+      metric('D&A',              usdM(L.d_and_a_m)),
+      metric('Cash from ops',    usdM(L.operating_cash_flow_m)),
+      metric('Capex',            usdM(L.capex_m)),
+      metric('Total assets',     usdM(L.total_assets_m)),
+      metric('Inventory',        usdM(L.inventory_m)),
+      metric('Cash + ST inv.',   usdM(L.cash_st_inv_m)),
+      metric('Diluted shares',   sh(L.shares_diluted), 'weighted average'),
+      metric('Membership fees',  usdM(L.membership_fee_m), L.membership_fee_m == null ? '' : 'income statement'),
+      metric('MRQ revenue',      usdM(L.mrq_revenue_m), 'fourth quarter'),
+      metric('MRQ revenue (PY)', usdM(L.mrq_revenue_prior_m), 'prior-year Q4'),
+    ]));
+    if (L.mrq_revenue_m == null){
+      parts.push('<p class="runstat">No quarterly period is tagged in this 10-K, so the ' +
+        'most-recent-quarter rows are blank. The SEC dropped the selected-quarterly-data ' +
+        'requirement in 2021 — the quarter is in the 10-Q, and this tool reads 10-Ks.</p>');
+    }
+
+    const V = d.valuation;
+    if (V){
+      const x = v => v == null ? none : v.toFixed(1) + '×';
+      parts.push('<h3>Valuation</h3>' + grid([
+        metric('Share price', V.price == null ? none : '$' + V.price.toFixed(2),
+               V.price_as_of ? esc(V.price_as_of) : ''),
+        metric('Shares out.', sh(V.cover_shares), 'cover page'),
+        metric('Fully diluted', sh(V.fully_diluted), '+ options and RSUs'),
+        metric('Market cap', usdM(V.market_cap_m)),
+        metric('Enterprise value', usdM(V.ev_m),
+               V.ev_missing.length ? 'no ' + esc(V.ev_missing.join(' or ')) + ' tagged' : ''),
+        metric('EBIT / EBITDA', usdM(V.ebit_m) + ' / ' + usdM(V.ebitda_m)),
+        metric('EV / EBITDA', x(V.ev_ebitda), V.ev_sales == null ? '' : 'EV/Sales ' + x(V.ev_sales)),
+        metric('P/E', x(V.pe), V.ev_ebit == null ? '' : 'EV/EBIT ' + x(V.ev_ebit)),
+      ]));
+      // The price is the filing's own, not a quote. Saying where it comes from
+      // is the difference between a number and a number you can check.
+      if (V.price_is_floor){
+        parts.push('<p class="runstat">Price is ' + esc(V.price_source || '') +
+          ', so it is a <strong>floor</strong> — affiliate-held shares are excluded, and a ' +
+          'company whose insiders hold a real stake prices low by roughly that percentage. ' +
+          'Public float ' + usdM(V.public_float_m) + ' on ' + esc(V.price_as_of || '') +
+          '; market cap above is that float restated. Nothing on this page is a live quote.</p>');
+      }
+      if (V.warning) parts.push('<p class="runstat">' + esc(V.warning) + '</p>');
+    }
+
+    if (d.history && d.history.length){
+      parts.push('<h3>Revenue and EPS history</h3><table class="ftable"><thead><tr>' +
+        '<th>Fiscal year end</th><th>Revenue ($M)</th><th>Net income ($M)</th><th>EPS</th>' +
+        '</tr></thead><tbody>' +
+        d.history.map(r => '<tr><td>' + esc(r.year) + '</td><td>' + num(r.revenue_m, 0) +
+          '</td><td>' + num(r.net_income_m, 0) + '</td><td>' +
+          (r.eps == null ? none : r.eps.toFixed(2)) + '</td></tr>').join('') +
+        '</tbody></table>');
+    }
+
+    if (d.risk && (d.risk.summary || (d.risk.added || []).length)){
+      let r = '<h3>What changed in the risks</h3><div class="risk">';
+      if (d.risk.summary) r += '<p class="tally">' + esc(d.risk.summary) + '</p>';
+      if ((d.risk.added || []).length){
+        r += '<ul>' + d.risk.added.map(t => '<li>' + esc(t) + '</li>').join('') + '</ul>';
+      }
+      parts.push(r + '</div>');
+    }
+
+    parts.push(reading(d));
+
+    if (d.missing && d.missing.length){
+      parts.push('<p class="runstat">Not tagged by this filer, so left blank: ' +
+        esc(d.missing.join(', ')) + '</p>');
+    }
+
+    if (d.files && d.files.length){
+      parts.push('<h3>Everything that landed in ' + esc(d.dir) + '</h3><div class="files">' +
+        d.files.map(f => '<a href="' + esc(f.href) + '" target="_blank" rel="noopener">' +
+          '<span class="name">' + esc(f.name) + '</span>' +
+          '<span class="kb">' + f.kb + ' KB</span></a>').join('') +
+        '</div>');
+    }
+
+    const run = d.run || {};
+    parts.push('<p class="runstat">' + (run.seconds != null ? run.seconds + 's' : '') +
+      (run.sec_requests != null ? ' · ' + run.sec_requests + ' SEC requests · ' +
+        run.cache_hits + ' cache hits' : '') + '</p>');
+
+    out.innerHTML = parts.join('');
+    wireReading();
+    out.hidden = false;
+  }
+
+  let timer = null;
+  function stopTimer(){ if (timer) { clearInterval(timer); timer = null; } }
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const ticker = input.value.trim().toUpperCase();
+    if (!ticker) return;
+
+    btn.disabled = true; input.disabled = true;
+    label.textContent = 'Pulling';
+    out.hidden = true; out.innerHTML = '';
+    status.dataset.tone = '';
+
+    const t0 = Date.now();
+    const tick = () => {
+      const s = Math.round((Date.now() - t0) / 1000);
+      status.innerHTML = 'Reading ' + esc(ticker) +
+        ' from SEC EDGAR <span class="tick">' + s + 's</span> — about fifteen seconds cold, instant once the filing is cached.';
+    };
+    tick(); stopTimer(); timer = setInterval(tick, 1000);
+
+    try {
+      const res = await fetch('/api/extract', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ticker: ticker})
+      });
+      const data = await res.json();
+      stopTimer();
+      if (!res.ok) throw new Error(data.error || ('Request failed (' + res.status + ')'));
+      status.textContent = '';
+      render(data);
+      out.scrollIntoView({behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start'});
+    } catch (err) {
+      stopTimer();
+      status.dataset.tone = 'error';
+      const offline = /Failed to fetch|NetworkError/i.test(err.message);
+      status.textContent = offline
+        ? 'Can’t reach the extractor. Start it with:  python3 serve.py'
+        : err.message;
+    } finally {
+      btn.disabled = false; input.disabled = false;
+      label.textContent = 'Pull the filing';
+    }
+  });
+
+  document.querySelectorAll('[data-fill]').forEach(b => {
+    b.addEventListener('click', () => {
+      input.value = b.dataset.fill;
+      form.requestSubmit();
+    });
+  });
+
+  // /?t=NVDA pulls that filing on load, so a result is a shareable link
+  const deep = new URLSearchParams(location.search).get('t');
+  if (deep) { input.value = deep.toUpperCase(); form.requestSubmit(); }
+})();
+
+document.querySelectorAll('a[href^="#"]').forEach(a=>{
+  a.addEventListener('click',e=>{
+    const t=document.querySelector(a.getAttribute('href'));
+    if(!t)return;
+    e.preventDefault();
+    const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+    t.scrollIntoView({behavior:reduce?'auto':'smooth',block:'start'});
+  });
+});
+</script>
+</body>
+</html>

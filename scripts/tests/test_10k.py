@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import sections  # noqa: E402
 import statements  # noqa: E402
 import trends  # noqa: E402
+import valuation  # noqa: E402
 
 
 def test_sections():
@@ -31,6 +32,10 @@ def test_statements():
 
 def test_trends():
     trends.demo()
+
+
+def test_valuation():
+    valuation.demo()
 
 
 @pytest.mark.network

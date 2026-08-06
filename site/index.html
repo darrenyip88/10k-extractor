@@ -3,58 +3,131 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>10K AI — three directions</title>
+<title>10K AI — four directions</title>
+<meta name="theme-color" content="#222222">
+<link rel="icon" href="assets/favicon-icarus.png" type="image/png">
 <style>
-@font-face{font-family:"Source Serif 4";src:url("assets/fonts/source-serif.woff2") format("woff2");font-weight:400 700;font-display:swap}
-@font-face{font-family:"Public Sans";src:url("assets/fonts/public-sans.woff2") format("woff2");font-weight:300 700;font-display:swap}
+@font-face{font-family:"Libre Caslon Display";src:url("assets/fonts/libre-caslon-display.woff2") format("woff2");font-weight:400;font-display:swap}
+@font-face{font-family:"Libre Franklin";src:url("assets/fonts/libre-franklin.woff2") format("woff2");font-weight:300 700;font-display:swap}
+
+/* Same ground, same two inks as the live page — an index that opened on white
+   would be the first thing to break the world it is indexing. */
+:root{
+  --void:#222222;--cream:#EFD5C8;--dim:#B79C8D;--faint:#A98D7D;--umber:#5F4F45;
+  --hair:rgba(239,213,200,.15);
+  --serif:"Libre Caslon Display",Baskerville,"Times New Roman",serif;
+  --sans:"Libre Franklin",-apple-system,Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
 *,*::before,*::after{box-sizing:border-box}
+html{overflow-x:clip}
 body{
-  margin:0;padding:clamp(2rem,7vw,5rem);background:#fff;color:#141414;
-  font-family:"Public Sans",-apple-system,Helvetica,Arial,sans-serif;
-  -webkit-font-smoothing:antialiased;
+  position:relative;overflow-x:clip;
+  margin:0;padding:clamp(2.5rem,8vw,6rem) clamp(1.15rem,4.5vw,3.25rem);
+  background:var(--void);color:var(--dim);
+  font-family:var(--sans);-webkit-font-smoothing:antialiased;
 }
 h1{
-  font-family:"Source Serif 4",Georgia,serif;font-weight:400;
-  font-size:clamp(1.6rem,4vw,2.4rem);letter-spacing:-.02em;margin:0 0 .4rem;
+  font-family:var(--serif);font-weight:400;
+  font-size:clamp(1.9rem,4.4vw,3rem);letter-spacing:-.015em;
+  color:var(--cream);margin:0 0 .6rem;
 }
-.sub{margin:0 0 clamp(2.4rem,6vh,4rem);color:#565656;font-size:.9375rem;max-width:52ch;line-height:1.55}
-ol{list-style:none;margin:0;padding:0;border-top:1px solid #141414}
-li{border-bottom:1px solid rgba(20,20,20,.18)}
+.sub{margin:0 0 clamp(2.4rem,6vh,4rem);font-size:.875rem;max-width:58ch;line-height:1.65}
+.sub b{color:var(--cream);font-weight:400}
+
+/* the page's own rule: a hairline that breaks into the pixel matrix */
+.rule{
+  height:7px;max-width:62rem;
+  background:
+    repeating-linear-gradient(90deg,var(--umber) 0 5px,transparent 5px 10px) 0 0/100% 5px no-repeat,
+    linear-gradient(var(--umber),var(--umber)) 0 100%/100% 1px no-repeat;
+  -webkit-mask-image:linear-gradient(90deg,transparent,#000 18%,#000 82%,transparent),linear-gradient(#000,#000);
+          mask-image:linear-gradient(90deg,transparent,#000 18%,#000 82%,transparent),linear-gradient(#000,#000);
+  -webkit-mask-size:100% 5px,100% 1px;mask-size:100% 5px,100% 1px;
+  -webkit-mask-position:0 0,0 100%;mask-position:0 0,0 100%;
+  -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
+}
+
+/* the same field as the live page, at the same measured ceiling */
+.cosmos{position:absolute;inset:0;z-index:-1;pointer-events:none}
+.planet{
+  position:absolute;aspect-ratio:1;
+  background:url("assets/planet.webp") center/contain no-repeat;
+  animation:drift 34s ease-in-out infinite alternate;will-change:transform;
+}
+.planet:nth-of-type(1){width:38px;left:88%;top:9%;opacity:.42}
+.planet:nth-of-type(2){width:14px;left:4%;top:31%;opacity:.5;animation-duration:26s}
+.planet:nth-of-type(3){width:46px;left:83%;top:58%;opacity:.24;animation-duration:44s}
+.planet:nth-of-type(4){width:20px;left:6%;top:79%;opacity:.38;animation-duration:31s}
+@keyframes drift{from{transform:translate3d(0,0,0)}to{transform:translate3d(2.4rem,-1.4rem,0)}}
+.plate{
+  position:absolute;right:-11%;top:34%;
+  width:clamp(19rem,44vw,40rem);aspect-ratio:760/920;opacity:.13;
+  background:url("assets/plate-fallen.webp") center/contain no-repeat;
+  -webkit-mask-image:linear-gradient(90deg,transparent 0 16%,rgba(0,0,0,.18) 16% 33%,rgba(0,0,0,.42) 33% 50%,rgba(0,0,0,.68) 50% 67%,rgba(0,0,0,.86) 67% 84%,#000 84%);
+          mask-image:linear-gradient(90deg,transparent 0 16%,rgba(0,0,0,.18) 16% 33%,rgba(0,0,0,.42) 33% 50%,rgba(0,0,0,.68) 50% 67%,rgba(0,0,0,.86) 67% 84%,#000 84%);
+}
+@media (max-width:52rem){.cosmos{opacity:.55}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important}}
+
+ol{list-style:none;margin:0;padding:0;max-width:62rem;position:relative}
+li{border-bottom:1px solid var(--hair)}
 a{
-  display:grid;grid-template-columns:1fr;gap:.3rem;
-  padding:clamp(1.2rem,3vh,1.8rem) 0;text-decoration:none;color:inherit;
+  display:grid;grid-template-columns:1fr;gap:.35rem;
+  padding:clamp(1.4rem,3.4vh,2.1rem) 0;text-decoration:none;color:inherit;
 }
-a:hover h2{text-decoration:underline;text-underline-offset:4px}
-h2{margin:0;font-family:"Source Serif 4",Georgia,serif;font-weight:400;font-size:clamp(1.15rem,2.2vw,1.6rem);letter-spacing:-.014em}
-.meta{font-size:.6875rem;letter-spacing:.16em;text-transform:uppercase;color:#565656}
-p{margin:0;font-size:.9375rem;line-height:1.55;color:#565656;max-width:62ch}
-:focus-visible{outline:1.5px solid #141414;outline-offset:3px}
-@media (min-width:760px){
-  a{grid-template-columns:1fr 1.4fr;column-gap:2rem;align-items:baseline}
+h2{
+  margin:0;font-family:var(--serif);font-weight:400;
+  font-size:clamp(1.25rem,2.4vw,1.75rem);letter-spacing:-.012em;
+  color:var(--cream);transition:opacity .18s;
+}
+a:hover h2{opacity:.72}
+.meta{font-family:var(--mono);font-size:.6875rem;letter-spacing:.04em;color:var(--faint)}
+p{margin:0;font-size:.9375rem;line-height:1.65;color:var(--dim);max-width:64ch}
+.live{
+  font-family:var(--sans);font-weight:600;font-size:.5625rem;
+  letter-spacing:.2em;text-transform:uppercase;color:var(--cream);
+  border:1px solid var(--cream);padding:.2em .5em;margin-left:.75em;
+  vertical-align:.24em;
+}
+:focus-visible{outline:1.5px solid var(--cream);outline-offset:3px}
+@media (min-width:48rem){
+  a{grid-template-columns:1fr 1.4fr;column-gap:clamp(1.5rem,4vw,3rem);align-items:baseline}
   h2{grid-column:1;grid-row:1}
-  .meta{grid-column:1;grid-row:2;padding-top:.4rem}
+  .meta{grid-column:1;grid-row:2;padding-top:.5rem}
   p{grid-column:2;grid-row:1/3}
 }
 </style>
 </head>
 <body>
-<h1>10K AI — three directions</h1>
-<p class="sub">Three was the shortlist. <strong>Letterpress</strong> is the one being built out — it has the working ticker box and the extractor behind it. The other two are the design only, kept for reference.</p>
+<div class="cosmos" aria-hidden="true">
+  <i class="planet"></i><i class="planet"></i><i class="planet"></i><i class="planet"></i>
+  <i class="plate"></i>
+</div>
+
+<h1>10K AI — four directions</h1>
+<p class="sub"><b>Icarus</b> is the one being built out — it has the working ticker box and the extractor behind it. The other three are the design only, kept for reference.</p>
+<div class="rule" role="presentation"></div>
 <ol>
+  <li><a href="/">
+    <h2>Four · Icarus<span class="live">live</span></h2>
+    <span class="meta">libre-caslon-display · #222222 · working extractor</span>
+    <p>Classical-glitch. A near-black ground edge to edge, one warm cream serif, and a winged classical figure bleeding off three edges, its wing streaking into chroma and every edge where the plate is cut breaking into a matrix of square pixels. Planets and two more figures drift behind the whole page. Type a ticker and it pulls the real filing from SEC EDGAR.</p>
+  </a></li>
+  <li><a href="v3-letterpress.html">
+    <h2>Three · Letterpress</h2>
+    <span class="meta">libre-caslon-display · #ffffff · design only</span>
+    <p>A broadside. Caslon throughout, double rules as the only ornament, on a ground of the Paestum temple rebuilt as a colour ASCII mosaic. The direction Icarus replaced; its ticker box no longer has a server route pointed at it.</p>
+  </a></li>
   <li><a href="v1-neoclassical.html">
     <h2>One · Neoclassical</h2>
-    <span class="meta">Bodoni Moda · Archivo · centred</span>
+    <span class="meta">bodoni-moda · archivo · design only</span>
     <p>A printed frontispiece. Symmetric axis, Didone display at full contrast, hairline rules, the output set as a centred index and the method in three columns split by vertical hairlines.</p>
   </a></li>
   <li><a href="v2-editorial.html">
     <h2>Two · Editorial grid</h2>
-    <span class="meta">Source Serif 4 · Public Sans · flush left</span>
+    <span class="meta">source-serif · public-sans · design only</span>
     <p>A broadsheet on a 12-column grid. Everything flush left, headline anchored to column one, tracked uppercase labels in the margin, the output set as a scannable file index.</p>
-  </a></li>
-  <li><a href="/">
-    <h2>Three · Letterpress — live</h2>
-    <span class="meta">Libre Caslon · Libre Franklin · working extractor</span>
-    <p>A broadside. Caslon throughout, double rules as the only ornament, on a ground of the Paestum temple rebuilt as a colour ASCII mosaic. Type a ticker and it pulls the real filing from SEC EDGAR.</p>
   </a></li>
 </ol>
 </body>

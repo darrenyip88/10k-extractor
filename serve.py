@@ -27,7 +27,7 @@ from urllib.parse import unquote, urlparse
 ROOT = Path(__file__).resolve().parent
 SITE = ROOT / "site"
 FILINGS = ROOT / "filings"
-HOME = "v3-letterpress.html"
+HOME = "v4-icarus.html"
 
 # A cold extraction is ~12 SEC requests and ~15s. Give it room, but never hang
 # a browser connection forever if SEC stalls.
@@ -90,6 +90,29 @@ def load_filing(out_dir):
                 if ln.startswith("- ")
             ]
 
+    # Written since the valuation pass was added; older extractions predate it.
+    vpath = out_dir / "valuation.json"
+    valuation = None
+    if vpath.exists():
+        v = json.loads(vpath.read_text())
+        q = v.get("quote") or {}
+        valuation = {
+            "price": q.get("price"),
+            "price_as_of": q.get("as_of"),
+            "price_source": q.get("source"),
+            "price_is_floor": bool(q.get("is_floor")),
+            "public_float_m": money(q.get("public_float")),
+            "cover_shares": (v["shares"].get("cover_page") or {}).get("total"),
+            "fully_diluted": v["shares"].get("fully_diluted"),
+            "market_cap_m": money(v.get("market_cap")),
+            "ev_m": money(v["bridge"].get("enterprise_value")),
+            "ev_missing": v["bridge"].get("missing_components") or [],
+            "ebit_m": money(v["operating"].get("ebit")),
+            "ebitda_m": money(v["operating"].get("ebitda")),
+            "warning": v.get("market_cap_warning"),
+            **{k: v["multiples"].get(k) for k in ("ev_sales", "ev_ebit", "ev_ebitda", "pe")},
+        }
+
     rel = out_dir.relative_to(ROOT).as_posix()
     files = []
     for p in sorted(out_dir.rglob("*")):
@@ -126,7 +149,21 @@ def load_filing(out_dir):
             "total_debt_m": money(d.get("total_debt")),
             "net_cash_m": money(d.get("net_cash")),
             "shares_change_pct": d.get("shares_change_pct"),
+            # The rest of the figures a valuation model asks for, all as filed.
+            "operating_income_m": money(at("operating_income", latest)),
+            "d_and_a_m": money(at("d_and_a", latest)),
+            "cash_st_inv_m": money(d.get("cash_and_st_investments")),
+            "shares_diluted": at("shares_diluted", latest),
+            "total_assets_m": money(at("total_assets", latest)),
+            "inventory_m": money(at("inventory", latest)),
+            "operating_cash_flow_m": money(at("operating_cash_flow", latest)),
+            "capex_m": money(at("capex", latest)),
+            "membership_fee_m": money(
+                trends.get("statement_lines", {}).get("membership_fee_income")),
+            "mrq_revenue_m": money(d.get("mrq_revenue")),
+            "mrq_revenue_prior_m": money(d.get("mrq_revenue_prior")),
         },
+        "valuation": valuation,
         "cagr": derived.get("cagr", {}),
         "history": history,
         "risk": risk,

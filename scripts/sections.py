@@ -83,6 +83,21 @@ def pick_sections(text):
     return {k: v for k, v in best.items() if v["length"] >= MIN_SECTION_CHARS}
 
 
+def bold_runs(soup):
+    """Every bolded run of text in the filing, flattened.
+
+    Both the risk-factor index and the condenser need this: a 10-K marks its
+    headings and its risk headlines with weight, and nothing else in the
+    document body is bold.
+    """
+    out = []
+    for el in soup.find_all(["b", "strong"]):
+        out.append(el.get_text(" ", strip=True))
+    for el in soup.find_all(style=re.compile(r"font-weight:\s*(bold|[6-9]00)", re.I)):
+        out.append(el.get_text(" ", strip=True))
+    return [_flat(t) for t in out if _flat(t)]
+
+
 def risk_headings(soup, risk_text):
     """The bolded headlines inside Item 1A — a ~60-line index of what the
     company is actually worried about, instead of 70k characters of prose.
@@ -94,15 +109,8 @@ def risk_headings(soup, risk_text):
     if not risk_text:
         return []
     haystack = _flat(risk_text)
-    candidates = []
-    for el in soup.find_all(["b", "strong"]):
-        candidates.append(el.get_text(" ", strip=True))
-    for el in soup.find_all(style=re.compile(r"font-weight:\s*(bold|[6-9]00)", re.I)):
-        candidates.append(el.get_text(" ", strip=True))
-
     out, seen = [], set()
-    for raw in candidates:
-        head = _flat(raw)
+    for head in bold_runs(soup):
         if not (30 <= len(head) <= 400) or head in seen:
             continue
         if head not in haystack:
@@ -110,6 +118,170 @@ def risk_headings(soup, risk_text):
         seen.add(head)
         out.append(head)
     return out
+
+
+# --- condensing ----------------------------------------------------------
+#
+# A 10-K section is unreadable as a wall of text: Item 1A runs 70k characters
+# and most of it is the same hedge restated. Condensing here rather than in the
+# browser means the CLI, the skill and the page all read the same summary, and
+# it stays a pure text transform — no model, no key, no cost, same as the rest
+# of the tool.
+#
+# The rule is extractive on purpose: every sentence in the output is a sentence
+# the company actually wrote. Nothing is paraphrased, so nothing can be
+# invented. What gets dropped is the second, third and fourth restatement of a
+# point already made, and the cross-references ("see Note 7").
+
+# A short line with no terminal punctuation is a heading. Kept tight on
+# purpose: at 160 a sentence broken mid-clause by the extractor ("...operating
+# segments (see") passes the test and gets set as a heading.
+HEADING_CHARS = 90
+
+# A line that continues the one above rather than starting something new.
+# `parse()` uses get_text("\n"), which puts every inline element on its own
+# line, so Apple's "iPhone" / "®" / "is the Company's line of smartphones"
+# arrives as three lines and every fragment would otherwise be promoted to a
+# heading. Anything opening lowercase or with punctuation is a continuation.
+CONTINUATION_RE = re.compile(r"^[a-z(\[\"'’“”®™°,;:.\)\-–—%$&/]")
+# Page furniture that survives text extraction: running heads and page numbers.
+FURNITURE_RE = re.compile(
+    r"^(table of contents|page \d+|\d{1,4}|[-–—•*]+)$|form 10-k\s*\|\s*\d+$", re.I)
+
+# Sentences that carry no information about the business: pointers to other
+# parts of the filing, and the standard disclaimers.
+BOILERPLATE_RE = re.compile(
+    r"(in conjunction with|refer to (part|note|item)|"
+    r"see (note|item|part) \d|incorporated (herein )?by reference|"
+    r"included (elsewhere )?in this (report|annual report|form 10-k)|"
+    r"is not a substitute for|in accordance with (u\.s\. )?generally accepted|"
+    r"forward.looking statements|we (can give )?no assurance|cannot assure|"
+    r"do not undertake (any )?obligation|are discussed (below|above)|"
+    r"for (further|additional|more) (discussion|information|detail))",
+    re.I,
+)
+# What makes a sentence worth keeping past the first one: a figure, a share of
+# something, a date, a count. The user's instruction is the design here — keep
+# the metrics.
+FIGURE_RE = re.compile(r"(\$\s?[\d,.]|\d+(\.\d+)?\s?%|\b\d[\d,.]{2,}|\b\d+(\.\d+)?\s?(billion|million|thousand|bps|basis points))")
+# Abbreviations that end in a period without ending a sentence. "U.S." is the
+# one that matters — it appears in nearly every 10-K paragraph.
+ABBREV_RE = re.compile(
+    r"(\b[A-Z]|\bNo|\bInc|\bCorp|\bCo|\bLtd|\bLLC|\bMr|\bMs|\bDr|\bSt|\bapprox|"
+    r"\bJan|\bFeb|\bMar|\bApr|\bJun|\bJul|\bAug|\bSept?|\bOct|\bNov|\bDec|"
+    r"\be\.g|\bi\.e|\bvs|\betc|\bFig)\.$"
+)
+
+
+def sentences(block):
+    """Split a paragraph into sentences without breaking on "U.S." or "Inc.".
+
+    A naive split on `(?<=[.!?])\\s+` cuts "our U.S. and Canadian operations"
+    in half, and 10-K prose is full of it.
+
+    Deliberately no rule for a trailing number: an earlier version also merged
+    across "1." for numbered lists, which swallowed the following sentence on
+    every paragraph ending "...in 2025." — and the swallowed sentence was often
+    the boilerplate the condenser exists to drop.
+    """
+    out = []
+    for piece in re.split(r"(?<=[.!?])\s+", block):
+        if out and ABBREV_RE.search(out[-1]):
+            out[-1] += " " + piece
+        else:
+            out.append(piece)
+    return [s.strip() for s in out if s.strip()]
+
+
+def reflow(text):
+    """Put the paragraphs back together before condensing them.
+
+    Section text arrives one line per inline element, so a single sentence can
+    be spread over six lines around a superscript ®. Sentence-level condensing
+    on that produces confetti. A line that starts lowercase or with punctuation
+    belongs to the line above; anything else starts a new block.
+    """
+    blocks = []
+    for raw in text.splitlines():
+        line = _flat(raw)
+        if not line or line.startswith(("#", "_Source:")) or FURNITURE_RE.match(line):
+            continue
+        if blocks and CONTINUATION_RE.match(line):
+            blocks[-1] += " " + line
+        else:
+            blocks.append(line)
+    return blocks
+
+
+def _is_heading(block, bold):
+    """Bold in the filing, or short with nothing terminal at the end.
+
+    The bold set is what makes risk factor headlines work. Those are full
+    sentences ending in a period — indistinguishable from prose by length or
+    punctuation — but the filer sets every one of them in bold, so the document
+    answers the question itself. Guessing instead ("a lone sentence under 200
+    characters is a headline") promoted half of Apple's product paragraphs.
+    """
+    if block in bold:
+        return True
+    return len(block) <= HEADING_CHARS and not block.endswith((".", "!", "?", ",", ";"))
+
+
+def condense_block(block, max_sentences=3):
+    """Keep the opening sentence and whatever carries a number. Drop the rest."""
+    kept = []
+    for i, sentence in enumerate(sentences(block)):
+        if BOILERPLATE_RE.search(sentence):
+            continue
+        if i == 0 or FIGURE_RE.search(sentence):
+            kept.append(sentence)
+        if len(kept) >= max_sentences:
+            break
+    return " ".join(kept)
+
+
+def condense(text, bold=(), max_sentences=3):
+    """Section text -> [{'kind': 'heading'|'text', 'text': ...}].
+
+    Headings survive whole; paragraphs get condensed; paragraphs that condense
+    to nothing (pure cross-reference) disappear, and a heading left with
+    nothing after it at the end goes with them.
+    """
+    bold = set(bold)
+    out = []
+    for block in reflow(text):
+        # Checked before the heading test: "Refer to Note 7." is one short
+        # sentence on its own line and would otherwise be promoted to a heading.
+        if BOILERPLATE_RE.search(block) and len(sentences(block)) == 1:
+            continue
+        if _is_heading(block, bold):
+            out.append({"kind": "heading", "text": block})
+            continue
+        short = condense_block(block, max_sentences)
+        if short:
+            out.append({"kind": "text", "text": short})
+    while out and out[-1]["kind"] == "heading":
+        out.pop()
+    return out
+
+
+def condensed_markdown(blocks, title, source_file, original_chars):
+    kept = sum(len(b["text"]) for b in blocks)
+    lines = [
+        "# {} — condensed".format(title),
+        "",
+        "_{:,} characters down to {:,} ({:.0f}% of the section). Every sentence below is the "
+        "company's own — the opening sentence of each paragraph plus every sentence carrying a "
+        "figure, with cross-references and boilerplate dropped. Nothing is paraphrased. Full "
+        "text: `{}`._".format(
+            original_chars, kept, 100.0 * kept / max(original_chars, 1), source_file
+        ),
+        "",
+    ]
+    for block in blocks:
+        lines += (["## " + block["text"], ""] if block["kind"] == "heading"
+                  else [block["text"], ""])
+    return "\n".join(lines)
 
 
 def _similarity(a, b):
@@ -222,6 +394,17 @@ def demo():
     heads = risk_headings(soup, secs["1A"]["text"])
     assert heads == ["Our supply chain depends on a small number of vendors."], heads
 
+    # Without the bold set that sentence is prose; with it, it is a headline.
+    assert condense("\n".join(["A one-line risk that reads like prose.", "Prose that follows it. " * 8]))[0][
+        "kind"] == "text"
+    assert condense("\n".join(["A one-line risk that reads like prose.", "Prose that follows it. " * 8]),
+                    bold=["A one-line risk that reads like prose."])[0]["kind"] == "heading"
+
+    # Inline fragments rejoin: one sentence split around a superscript.
+    assert reflow("iPhone\n®\nis the Company’s line of smartphones.\nProducts") == [
+        "iPhone ® is the Company’s line of smartphones.", "Products"
+    ], reflow("iPhone\n®\nis the Company’s line of smartphones.\nProducts")
+
     d = diff_risks(
         ["Risk A about supply chains", "Brand new risk this year"],
         ["Risk A about supply chain", "An old risk we dropped"],
@@ -261,7 +444,41 @@ def demo():
     d = diff_risks([long_now], [long_was])
     assert d["added"] == [] and d["removed"] == [], d
     assert len(d["reworded"]) == 1, d["reworded"]
-    print("ok: sections — TOC/body split, hidden-block removal, risk headings, diff")
+
+    # --- condensing -------------------------------------------------------
+    # "U.S." must not end a sentence, or every 10-K paragraph splits wrong.
+    assert sentences("We rely on our U.S. and Canadian operations. They are large.") == [
+        "We rely on our U.S. and Canadian operations.",
+        "They are large.",
+    ], sentences("We rely on our U.S. and Canadian operations. They are large.")
+
+    section = "\n".join([
+        "# Item 1A. Risk Factors",
+        "_Source: https://example.com/x.htm_",
+        "Business and Operating Risks",
+        "We are highly dependent on the financial performance of our U.S. operations.",
+        "Our performance depends on those operations, which comprised 86% of net sales in 2025. "
+        "This should be read in conjunction with Item 7 of this Report. "
+        "We could be affected by many other things. "
+        "California alone was 26% of U.S. net sales.",
+        "Refer to Note 7 for further discussion.",
+        "Legal Proceedings",
+    ])
+    headline = "We are highly dependent on the financial performance of our U.S. operations."
+    blocks = condense(section, bold=[headline])
+    assert blocks[0] == {"kind": "heading", "text": "Business and Operating Risks"}, blocks[0]
+    assert blocks[1] == {"kind": "heading", "text": headline}, blocks[1]
+    body = blocks[2]["text"]
+    assert "86% of net sales" in body and "26% of U.S. net sales" in body, body
+    assert "in conjunction with" not in body, "boilerplate survived"
+    assert "many other things" not in body, "a figureless middle sentence survived"
+    # A paragraph that is nothing but a cross-reference disappears, and the
+    # trailing heading with nothing under it goes with it.
+    assert len(blocks) == 3, blocks
+    md = condensed_markdown(blocks, "Item 1A. Risk Factors", "sections/x.md", len(section))
+    assert md.startswith("# Item 1A. Risk Factors — condensed")
+    assert "## Business and Operating Risks" in md
+    print("ok: sections — TOC/body split, hidden-block removal, risk headings, diff, condensing")
 
 
 if __name__ == "__main__":

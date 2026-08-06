@@ -122,6 +122,10 @@ def main():
     shutil.rmtree(ICONSET)
     print("wrote", OUT, os.path.getsize(OUT), "bytes")
 
+    # the same mark for the browser tab, so the site stops 404ing on favicon.ico
+    draw_plate(64, rules=False).save("favicon.png")
+    print("wrote favicon.png")
+
 
 if __name__ == "__main__":
     main()

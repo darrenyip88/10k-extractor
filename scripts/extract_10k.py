@@ -4,15 +4,18 @@
     ./run_10k.sh AAPL
 
 Writes filings/<TICKER>/<fiscal-year-end>/ containing the raw filing, the plain
-text, each Item as its own file, the as-filed financial statements, a ten-year
-financial history, the risk-factor index, and a diff of this year's risks
-against last year's. Then read SUMMARY.md.
+text, each Item as its own file plus a condensed version of it, the as-filed
+financial statements, a ten-year financial history, the risk-factor index, and
+a diff of this year's risks against last year's. Then read SUMMARY.md.
 
-Everything comes from SEC EDGAR. No API key, no quota, no cost.
+Everything comes from SEC EDGAR, and every figure comes out of a 10-K —
+including the share price, which the cover page implies rather than a quote
+feed supplying. No API key, no quota, no cost, no live market data.
 """
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -20,10 +23,19 @@ from pathlib import Path
 import sections
 import statements
 import trends
+import valuation
 from sec_client import SECClient, SECError
 
 EDGAR_FILING_INDEX = "https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{doc}"
 DEFAULT_OUT = Path(__file__).resolve().parent.parent / "filings"
+
+# Subscription revenue reported as its own line on the income statement — the
+# membership warehouses (COST, BJ) and the club retailers. Dimensioned in XBRL,
+# so it never reaches companyfacts; read off the rendered statement instead.
+MEMBERSHIP_RE = re.compile(r"membership\s+(fee|due|income)", re.I)
+
+# Below this a section is a stub or a cross-reference, not something to condense.
+CONDENSE_MIN_CHARS = 3000
 
 
 def write(path, text):
@@ -32,19 +44,34 @@ def write(path, text):
     return path
 
 
-def section_files(out_dir, secs, source_url):
-    """One markdown file per Item we care about. Returns {key: relative path}."""
-    written = {}
+def section_files(out_dir, secs, source_url, bold):
+    """One markdown file per Item we care about, plus a condensed twin.
+
+    Returns ({key: relative path}, {key: relative condensed path}).
+    """
+    written, condensed = {}, {}
     for key, filename in sections.ITEM_FILES.items():
         sec = secs.get(key)
         if not sec:
             continue
-        body = "# Item {}. {}\n\n_Source: {}_\n\n{}\n".format(
-            key, sec["title"], source_url, sec["text"]
-        )
+        title = "Item {}. {}".format(key, sec["title"])
+        body = "# {}\n\n_Source: {}_\n\n{}\n".format(title, source_url, sec["text"])
         write(out_dir / "sections" / (filename + ".md"), body)
         written[key] = "sections/{}.md".format(filename)
-    return written
+
+        blocks = sections.condense(sec["text"], bold)
+        # Nothing gets a summary unless it earns one. A short section has
+        # nothing to condense — JPMorgan answers Item 7 with a page reference,
+        # in 587 characters — and the summary's own header note would make the
+        # "condensed" file the longer of the two.
+        kept = sum(len(b["text"]) for b in blocks)
+        if blocks and len(sec["text"]) >= CONDENSE_MIN_CHARS and kept < 0.9 * len(sec["text"]):
+            write(
+                out_dir / "summaries" / (filename + ".md"),
+                sections.condensed_markdown(blocks, title, written[key], len(sec["text"])),
+            )
+            condensed[key] = "summaries/{}.md".format(filename)
+    return written, condensed
 
 
 def risk_diff_markdown(diff, current_year, prior_year):
@@ -96,15 +123,24 @@ def risk_diff_markdown(diff, current_year, prior_year):
     return "\n".join(lines) + "\n"
 
 
-def summary_markdown(meta, data, secs, files, risk_heads, diff, stmt_names):
+def summary_markdown(meta, data, secs, files, summaries, risk_heads, diff, stmt_names, val):
     years = data["fiscal_year_ends"]
     latest = years[-1] if years else None
     d = data["derived"].get(latest, {}) if latest else {}
     s = data["series"]
+    lines_from_statement = data.get("statement_lines", {})
 
     def money(key):
         v = s.get(key, {}).get("values", {}).get(latest)
         return "—" if v is None else "${:,.0f}M".format(v / 1e6)
+
+    def dmoney(key):
+        v = d.get(key)
+        return "—" if v is None else "${:,.0f}M".format(v / 1e6)
+
+    def count(key):
+        v = s.get(key, {}).get("values", {}).get(latest)
+        return "—" if v is None else "{:,.0f}".format(v)
 
     def pct(key):
         v = d.get(key)
@@ -130,8 +166,12 @@ def summary_markdown(meta, data, secs, files, risk_heads, diff, stmt_names):
         "| Metric | Value |",
         "|---|---|",
         "| Revenue | {} ({} YoY) |".format(money("revenue"), pct("revenue_growth_pct")),
+        "| MRQ revenue (Q4) | {} |".format(dmoney("mrq_revenue")),
+        "| MRQ revenue (prior year Q4) | {} |".format(dmoney("mrq_revenue_prior")),
         "| Gross margin | {} |".format(pct("gross_margin_pct")),
-        "| Operating margin | {} |".format(pct("operating_margin_pct")),
+        "| Operating income | {} ({} margin) |".format(
+            money("operating_income"), pct("operating_margin_pct")),
+        "| D&A | {} |".format(money("d_and_a")),
         "| Net income | {} ({} YoY) |".format(money("net_income"), pct("net_income_growth_pct")),
         "| Net margin | {} |".format(pct("net_margin_pct")),
         "| EPS (diluted) | {} ({} YoY) |".format(
@@ -140,12 +180,17 @@ def summary_markdown(meta, data, secs, files, risk_heads, diff, stmt_names):
             else "${:,.2f}".format(s["eps_diluted"]["values"][latest]),
             pct("eps_growth_pct"),
         ),
-        "| Operating cash flow | {} |".format(money("operating_cash_flow")),
+        "| Diluted shares (weighted average) | {} |".format(count("shares_diluted")),
+        "| Cash from ops | {} |".format(money("operating_cash_flow")),
+        "| Capex | {} |".format(money("capex")),
         "| Free cash flow | {} ({} margin) |".format(
             "—" if d.get("free_cash_flow") is None else "${:,.0f}M".format(d["free_cash_flow"] / 1e6),
             pct("fcf_margin_pct"),
         ),
         "| ROE | {} |".format(pct("roe_pct")),
+        "| Total assets | {} |".format(money("total_assets")),
+        "| Inventory | {} |".format(money("inventory")),
+        "| Cash + ST investments | {} |".format(dmoney("cash_and_st_investments")),
         "| Total debt | {} |".format(
             "—" if d.get("total_debt") is None else "${:,.0f}M".format(d["total_debt"] / 1e6)
         ),
@@ -165,11 +210,69 @@ def summary_markdown(meta, data, secs, files, risk_heads, diff, stmt_names):
             )
         ),
         "| Diluted share count | {} YoY |".format(pct("shares_change_pct")),
+    ]
+    if lines_from_statement.get("membership_fee_income") is not None:
+        lines.append("| Membership fee income | ${:,.0f}M — {}, {} |".format(
+            lines_from_statement["membership_fee_income"] / 1e6,
+            lines_from_statement["source"],
+            lines_from_statement.get("membership_fee_column") or "latest column"))
+    lines += [
         "",
         "Ratios are computed from the company's tagged XBRL values, not reported by the company. "
         "Full series and the concepts used: `trends.md`.",
         "",
     ]
+    if d.get("mrq_revenue") is None:
+        lines += [
+            "The most-recent-quarter rows are blank because this filer's 10-K tags no quarterly "
+            "period. The SEC dropped the selected-quarterly-financial-data requirement in 2021, "
+            "so most 10-Ks now report the year only; the quarter lives in the 10-Q, and this "
+            "tool reads 10-Ks. Nothing is reconstructed to fill the gap.",
+            "",
+        ]
+
+    v, b, m = val, val["bridge"], val["multiples"]
+    lines += [
+        "## Valuation",
+        "",
+        "| | |",
+        "|---|---|",
+        "| Share price | {} |".format(
+            "— (not derivable from this filing)" if not (v["quote"] or {}).get("price")
+            else "${:,.2f} as of {} — {}".format(
+                v["quote"]["price"], v["quote"].get("as_of") or "the cover date",
+                v["quote"].get("source", ""))),
+        "| Shares (cover page) | {} |".format(
+            "—" if not v["shares"]["cover_page"]
+            else "{:,.0f} as of {}".format(
+                v["shares"]["cover_page"]["total"], v["shares"]["cover_page"]["as_of"])),
+        "| Shares (fully diluted, + options and RSUs) | {} |".format(
+            "—" if v["shares"]["fully_diluted"] is None
+            else "{:,.0f}".format(v["shares"]["fully_diluted"])),
+        "| Market cap | {} |".format(valuation._m(v["market_cap"])),
+        "| Enterprise value | {} = mkt cap {} + debt {} + preferred {} + minority {} − cash {} |".format(
+            valuation._m(b["enterprise_value"]), valuation._m(b["market_cap"]),
+            valuation._m(b["total_debt"]), valuation._m(b["preferred"]),
+            valuation._m(b["minority_interest"]), valuation._m(b["cash_and_equivalents"])),
+        "| EV / Sales · EBIT · EBITDA | {} · {} · {} |".format(
+            valuation._x(m["ev_sales"]), valuation._x(m["ev_ebit"]), valuation._x(m["ev_ebitda"])),
+        "| P/E · FCF yield | {} · {} |".format(
+            valuation._x(m["pe"]),
+            "—" if m["fcf_yield_pct"] is None else "{}%".format(m["fcf_yield_pct"])),
+        "",
+    ]
+    if (v["quote"] or {}).get("is_floor"):
+        lines += [
+            "The price is the filing's own and comes from the cover page: aggregate market value "
+            "of common equity held by non-affiliates, divided by shares outstanding. It excludes "
+            "affiliate-held shares, so it is a **floor** — a company whose insiders hold a real "
+            "stake prices low by roughly that percentage. Market cap here is the public float "
+            "restated. `valuation.md` shows the whole calculation; `--price` overrides it.",
+            "",
+        ]
+    if v.get("market_cap_warning"):
+        lines += ["> {}".format(v["market_cap_warning"]), ""]
+    lines += ["Full bridge, the share-count sources, and the footnote rows: `valuation.md`.", ""]
 
     if len(years) > 1:
         lines += ["## Revenue and EPS history", "", "| Year end | Revenue ($M) | EPS |", "|---|---|---|"]
@@ -228,9 +331,16 @@ def summary_markdown(meta, data, secs, files, risk_heads, diff, stmt_names):
                 rel, key, descriptions.get(key, secs[key]["title"]), len(secs[key]["text"])
             )
         )
+    for key, rel in summaries.items():
+        lines.append(
+            "| `{}` | Item {} condensed — the company's own sentences, boilerplate dropped |".format(
+                rel, key
+            )
+        )
     for name in stmt_names:
         lines.append("| `statements/{}.md` | As-filed statement (`.json` alongside) |".format(name))
     lines.append("| `trends.md` | {}-year financial history and ratios |".format(len(years)))
+    lines.append("| `valuation.md` | Share count, market cap, EV bridge, multiples (`.json` alongside) |")
     lines.append("| `risk_headings.md` | Index of every risk factor headline |")
     if diff:
         lines.append("| `risk_diff.md` | Risks added and removed vs last year |")
@@ -279,8 +389,10 @@ def run(args):
     soup, text = sections.parse(html)
     write(out_dir / "full_text.txt", text)
     secs = sections.pick_sections(text)
-    files = section_files(out_dir, secs, source_url)
-    print("  sections: {} extracted ({:,} chars of text)".format(len(files), len(text)))
+    # The filing's own bold runs tell the condenser which lines are headings.
+    files, summaries = section_files(out_dir, secs, source_url, sections.bold_runs(soup))
+    print("  sections: {} extracted ({:,} chars of text), {} condensed".format(
+        len(files), len(text), len(summaries)))
 
     risk_text = secs.get("1A", {}).get("text", "")
     risk_heads = sections.risk_headings(soup, risk_text)
@@ -336,13 +448,45 @@ def run(args):
     print("  statements: {}".format(", ".join(s["name"] for s in stmts) or "none"))
 
     print("  fetching 10-year XBRL history...")
-    data = trends.build(
-        client.companyfacts(cik), max_years=args.years, as_of=filing["report_date"]
-    )
+    facts = client.companyfacts(cik)
+    data = trends.build(facts, max_years=args.years, as_of=filing["report_date"])
+    # Revenue lines the filer tags along a dimension are dropped by the
+    # companyfacts API entirely, so they come off the rendered statement.
+    income = next((s["table"] for s in stmts if s["name"] == "income_statement"), None)
+    fee, fee_col = statements.line_value(income, MEMBERSHIP_RE)
+    data["statement_lines"] = {
+        "membership_fee_income": fee,
+        "membership_fee_column": fee_col,
+        "source": "as-filed income statement" if fee is not None else None,
+    }
     write(out_dir / "trends.json", json.dumps(data, indent=2))
     write(out_dir / "trends.md", trends.to_markdown(data, subs["name"]))
     print("  trends: {} fiscal years, {} metrics not tagged".format(
         len(data["fiscal_year_ends"]), len(data["missing"])))
+
+    print("  share count and valuation...")
+    cover, awards = valuation.gather(client, cik, filing, facts)
+    if args.price:
+        quote = {"price": args.price, "as_of": "supplied with --price", "source": "--price"}
+    elif args.no_price:
+        quote = {"price": None, "error": "skipped with --no-price"}
+    else:
+        quote = valuation.filing_price(facts, filing["accession"], cover)
+    val = valuation.build(
+        data["series"], data["derived"], filing["report_date"],
+        cover, awards, quote, shares_override=args.shares,
+    )
+    write(out_dir / "valuation.json", json.dumps(val, indent=2))
+    write(out_dir / "valuation.md", valuation.to_markdown(val, subs["name"], ticker))
+    print("    shares: cover {}, fully diluted {}".format(
+        "—" if not cover else "{:,.0f}".format(cover["total"]),
+        "—" if not val["shares"]["fully_diluted"] else "{:,.0f}".format(val["shares"]["fully_diluted"])))
+    if quote.get("error"):
+        print("    price: unavailable ({}) — pass --price to supply one".format(quote["error"]))
+    elif quote.get("price"):
+        print("    price: ${:,.2f} — {}".format(quote["price"], quote["source"]))
+    print("    market cap {} · EV {}".format(
+        valuation._m(val["market_cap"]), valuation._m(val["bridge"]["enterprise_value"])))
 
     meta = {
         "ticker": ticker,
@@ -365,7 +509,8 @@ def run(args):
     write(out_dir / "metadata.json", json.dumps(meta, indent=2))
     write(
         out_dir / "SUMMARY.md",
-        summary_markdown(meta, data, secs, files, risk_heads, diff, [s["name"] for s in stmts]),
+        summary_markdown(meta, data, secs, files, summaries, risk_heads, diff,
+                         [s["name"] for s in stmts], val),
     )
 
     print("\nDone: {}".format(out_dir))
@@ -382,6 +527,14 @@ def main():
     p.add_argument("--years", type=int, default=10, help="years of XBRL history (default 10)")
     p.add_argument("--all-tables", action="store_true",
                    help="also pull every note table (segments, geography, debt, leases) — ~70 more requests")
+    p.add_argument("--price", type=float,
+                   help="share price for the market cap, overriding the one implied by the "
+                        "filing's cover page (public float / shares outstanding)")
+    p.add_argument("--shares", type=float,
+                   help="share count for the market cap, overriding the cover page "
+                        "(needed for multi-class filers like BRK)")
+    p.add_argument("--no-price", action="store_true",
+                   help="skip the price — everything but market cap, EV and the multiples")
     p.add_argument("--no-diff", action="store_true", help="skip the prior-year risk factor diff")
     p.add_argument("--refresh", action="store_true", help="ignore the cache and re-download")
     p.add_argument("--out", help="output directory (default: ../filings)")

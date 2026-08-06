@@ -98,14 +98,27 @@ def parse_report(html):
         return None
     df = tables[0]
 
+    # The first header level is the period length ("12 Months Ended", "3 Months
+    # Ended"), and it is the only thing separating two columns that otherwise
+    # look identical: Costco's 2017 income statement has "Sep. 03, 2017" twice,
+    # once for the fourth quarter and once for the year, with different numbers
+    # under each. Dropping the level, as this used to, makes the two
+    # indistinguishable — to a reader of the markdown and to line_value alike.
     if isinstance(df.columns, pd.MultiIndex):
         headers = [str(c[-1]) for c in df.columns]
+        periods = [str(c[0]) for c in df.columns]
         units = str(df.columns[0][0])
     else:
         headers = [str(c) for c in df.columns]
+        periods = [""] * len(headers)
         units = headers[0]
     # Column 0's header repeats the table title; the periods start at column 1.
     columns = ["Line item"] + headers[1:]
+    periods = [""] + periods[1:]
+    if len(set(periods[1:])) > 1:
+        columns = ["Line item"] + [
+            "{} ({})".format(h, p) for h, p in zip(headers[1:], periods[1:])
+        ]
 
     rows = []
     for _, row in df.iterrows():
@@ -113,7 +126,79 @@ def parse_report(html):
         if not cells or not cells[0]:
             continue
         rows.append(cells)
-    return {"units": re.sub(r"\s+", " ", units).strip(), "columns": columns, "rows": rows}
+    return {
+        "units": re.sub(r"\s+", " ", units).strip(),
+        "columns": columns,
+        "periods": periods,
+        "rows": rows,
+    }
+
+
+# "Consolidated Statements Of Income - USD ($) shares in Thousands, $ in Millions"
+DOLLAR_SCALE_RE = re.compile(r"\$ in (thousand|million|billion)s?", re.I)
+DOLLAR_SCALES = {"thousand": 1e3, "million": 1e6, "billion": 1e9}
+
+
+def _money(cell):
+    """'$ 5,323' -> 5323.0, '(154)' -> -154.0. None for anything non-numeric."""
+    text = str(cell).strip()
+    if not text or "%" in text:
+        return None
+    neg = text.startswith("(") and text.endswith(")")
+    text = re.sub(r"[(),$\s]", "", text)
+    try:
+        value = float(text)
+    except ValueError:
+        return None
+    return -value if neg else value
+
+
+ANNUAL_PERIOD_RE = re.compile(r"1[23] months", re.I)
+
+
+def _annual_columns(table):
+    """Column indices worth reading, most-likely-annual first.
+
+    A filer that shows quarters alongside the year renders the quarters *first*
+    — Costco's 2017 income statement opens with seven 3-month columns and puts
+    the twelve-month ones at index 9. Taking the leftmost number there returns a
+    quarter's membership fees ($644M) in place of the year's ($2,853M).
+    """
+    periods = table.get("periods") or []
+    order = list(range(1, len(table["columns"])))
+    annual = [i for i in order if i < len(periods) and ANNUAL_PERIOD_RE.search(periods[i])]
+    return annual + [i for i in order if i not in set(annual)]
+
+
+def line_value(table, pattern, lookahead=3):
+    """-> (value in dollars, column header) for the first row matching `pattern`.
+
+    For revenue split by product or service — Costco's membership fees, and any
+    other line the filer tags along a dimension — the rendered statement is the
+    only source. XBRL companyfacts carries undimensioned facts only, so those
+    lines are simply absent from it.
+
+    The rendering puts the dimension on a row of its own with no numbers
+    ("Membership fees"), then repeats the statement's own labels underneath it
+    ("REVENUE", "Total revenue | $ 5,323"). So a match walks forward a few rows
+    until it finds numbers rather than giving up on the empty label row.
+    """
+    if not table:
+        return None, None
+    m = DOLLAR_SCALE_RE.search(table.get("units", ""))
+    scale = DOLLAR_SCALES[m.group(1).lower()] if m else 1.0
+    rows, cols = table["rows"], _annual_columns(table)
+    for i, row in enumerate(rows):
+        if not pattern.search(row[0]):
+            continue
+        for candidate in rows[i:i + lookahead + 1]:
+            for col in cols:
+                if col >= len(candidate):
+                    continue
+                value = _money(candidate[col])
+                if value is not None:
+                    return value * scale, table["columns"][col]
+    return None, None
 
 
 def to_markdown(title, table):
@@ -208,7 +293,37 @@ def demo():
     assert "$ in Millions" in t["units"], t["units"]
     md = to_markdown("Income Statement", t)
     assert "| Net income | 112010 | 93736 |" in md, md
-    print("ok: statements — report classification, biggest-table pick, markdown")
+
+    # A dimensioned revenue line, Costco's shape: the dimension label carries no
+    # numbers and the value sits two rows below it, scaled by the unit header.
+    cost = {
+        "units": "Consolidated Statements Of Income - USD ($) shares in Thousands, $ in Millions",
+        "columns": ["Line item", "Aug. 31, 2025", "Sep. 01, 2024"],
+        "rows": [
+            ["Total revenue", "$ 275,235", "$ 254,453"],
+            ["Interest expense", "(154)", "(169)"],
+            ["Membership fees", "", ""],
+            ["REVENUE", "", ""],
+            ["Total revenue", "$ 5,323", "$ 4,828"],
+        ],
+    }
+    value, col = line_value(cost, re.compile(r"membership\s+(fee|due)", re.I))
+    assert value == 5323e6 and col == "Aug. 31, 2025", (value, col)
+    assert line_value(cost, re.compile(r"nothing here", re.I)) == (None, None)
+    assert _money("(154)") == -154.0 and _money("$ 5,323") == 5323.0 and _money("") is None
+
+    # Costco's 2017 shape: seven quarterly columns rendered *before* the annual
+    # ones. Leftmost-number-wins returns a quarter's fees instead of the year's.
+    mixed = {
+        "units": "Income - USD ($) $ in Millions",
+        "columns": ["Line item", "May 07, 2017 (3 Months Ended)",
+                    "Sep. 03, 2017 (4 Months Ended)", "Sep. 03, 2017 (12 Months Ended)"],
+        "periods": ["", "3 Months Ended", "4 Months Ended", "12 Months Ended"],
+        "rows": [["Membership fees", "", "", ""], ["Total revenue", "644", "943", "2,853"]],
+    }
+    value, col = line_value(mixed, re.compile(r"membership\s+fee", re.I))
+    assert value == 2853e6 and "12 Months" in col, (value, col)
+    print("ok: statements — report classification, biggest-table pick, line lookup, markdown")
 
 
 if __name__ == "__main__":

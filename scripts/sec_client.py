@@ -10,7 +10,6 @@ Filings are immutable once accepted, so responses are cached to disk forever.
 
 import hashlib
 import json
-import os
 import re
 import sys
 import time
@@ -23,18 +22,7 @@ warnings.filterwarnings("ignore", message=".*OpenSSL.*")
 
 import requests  # noqa: E402
 
-# SEC requires a User-Agent naming a real person and contact email. Set it:
-#   export SEC_USER_AGENT="Your Name you@example.com"
-# A generic or missing UA gets a 403 on every request, so fail fast and loud
-# here rather than 403-ing halfway through an extraction.
-UA = os.environ.get("SEC_USER_AGENT", "").strip()
-if not UA:
-    sys.exit(
-        "SEC_USER_AGENT is not set.\n\n"
-        "SEC EDGAR requires a User-Agent with a real contact email, or it\n"
-        "returns 403 for every request. Set it once in your shell profile:\n\n"
-        '    export SEC_USER_AGENT="Your Name you@example.com"\n'
-    )
+UA = "Darren Yip darrenyip28@gmail.com"
 RATE_LIMIT_DELAY = 0.15  # SEC allows 10 req/s; 0.15s leaves headroom
 MAX_RETRIES = 3
 RETRY_STATUS = {429, 500, 502, 503, 504}
