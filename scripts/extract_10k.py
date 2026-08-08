@@ -11,6 +11,12 @@ a diff of this year's risks against last year's. Then read SUMMARY.md.
 Everything comes from SEC EDGAR, and every figure comes out of a 10-K —
 including the share price, which the cover page implies rather than a quote
 feed supplying. No API key, no quota, no cost, no live market data.
+
+One exception, and it is additive: the 10-K is audited but up to a year stale,
+so the tagged numbers from every 10-Q filed since are used to roll the year
+forward to a trailing-twelve-month column that sits *beside* the annual one.
+Nothing 10-K-only is displaced — the risk factors, the share-comp footnote and
+the audited statements are what a 10-Q hasn't got. `--no-ttm` skips it.
 """
 
 import argparse
@@ -123,6 +129,102 @@ def risk_diff_markdown(diff, current_year, prior_year):
     return "\n".join(lines) + "\n"
 
 
+def ttm_section(t, val):
+    """The trailing-twelve-month block for SUMMARY.md.
+
+    Additive by design: nothing above it changes, and every 10-K-only figure —
+    risk factors, the share-comp footnote, the audited statements — stays put.
+    A 10-Q restates the numbers, not the document.
+    """
+    if not t:
+        return [
+            "## Trailing twelve months",
+            "",
+            "Nothing to roll forward: no 10-Q post-dates this 10-K with a comparable "
+            "prior-year period. Every figure above is the fiscal year as filed.",
+            "",
+        ]
+
+    tv = (val or {}).get("ttm") or {}
+    fy, ttm = t["fiscal_year_end"], t["values"]
+    g, annual = t["ytd_growth_pct"], t["fiscal_year"]
+
+    def fmt(v, money=True):
+        if v is None:
+            return "—"
+        return "${:,.0f}M".format(v / 1e6) if money else "${:,.2f}".format(v)
+
+    lines = [
+        "## Trailing twelve months",
+        "",
+        "The year above is audited and up to a year old. This is the same year rolled forward "
+        "with every 10-Q filed since — **{}** — using".format(t["basis"]),
+        "",
+        "> TTM = fiscal year + year-to-date this year − year-to-date a year ago",
+        "",
+        "Year-to-date, not four discrete quarters: a 10-Q's cash flow statement is always "
+        "cumulative from the year start, and the fourth quarter never appears in a 10-Q at all. "
+        "Source: {} ended {}, filed {}. Costs no extra SEC requests — it comes out of the same "
+        "companyfacts call as the ten-year history.".format(
+            t["fiscal_period"] or "latest 10-Q", t["quarter_end"], t["quarter_filed"]),
+        "",
+        "| Metric | FY {} | TTM to {} | YTD vs prior-year YTD |".format(fy, t["quarter_end"]),
+        "|---|---|---|---|",
+    ]
+    for label, key, money in [
+        ("Revenue", "revenue", True),
+        ("Operating income", "operating_income", True),
+        ("Net income", "net_income", True),
+        ("EPS (diluted)", "eps_diluted", False),
+        ("Cash from ops", "operating_cash_flow", True),
+        ("Capex", "capex", True),
+        ("D&A", "d_and_a", True),
+    ]:
+        lines.append("| {} | {} | {} | {} |".format(
+            label,
+            fmt(annual.get(key), money),
+            fmt(ttm.get(key), money),
+            "—" if g.get(key) is None else "{:+.1f}%".format(g[key]),
+        ))
+    lines += [
+        "",
+        "The last column compares the two year-to-date periods directly — it is the cleanest "
+        "growth read in here, because both sides are the same length and neither depends on "
+        "the annual figure.",
+        "",
+    ]
+    if tv.get("multiples"):
+        fm, tm = val["multiples"], tv["multiples"]
+        lines += [
+            "Multiples restated on TTM, with the balance sheet moved to the quarter end so a "
+            "fresh numerator is not sitting over a stale bridge:",
+            "",
+            "| | FY {} | TTM |".format(fy),
+            "|---|---|---|",
+            "| Enterprise value | {} | {} |".format(
+                valuation._m(val["bridge"]["enterprise_value"]),
+                valuation._m(tv["bridge"]["enterprise_value"])),
+            "| EV / Sales | {} | {} |".format(
+                valuation._x(fm["ev_sales"]), valuation._x(tm["ev_sales"])),
+            "| EV / EBITDA | {} | {} |".format(
+                valuation._x(fm["ev_ebitda"]), valuation._x(tm["ev_ebitda"])),
+            "| EV / EBIT | {} | {} |".format(
+                valuation._x(fm["ev_ebit"]), valuation._x(tm["ev_ebit"])),
+            "| P/E | {} | {} |".format(valuation._x(fm["pe"]), valuation._x(tm["pe"])),
+            "",
+            "Share count is the 10-Q's own cover page where it has one; the price is unchanged, "
+            "since a 10-Q states one no more than a 10-K does. Full workings: `valuation.md`.",
+            "",
+        ]
+    if t["not_tagged"]:
+        lines += [
+            "Not tagged in this filer's 10-Qs, so absent from the TTM column: {}. The annual "
+            "figures are unaffected.".format(", ".join(t["not_tagged"])),
+            "",
+        ]
+    return lines
+
+
 def summary_markdown(meta, data, secs, files, summaries, risk_heads, diff, stmt_names, val):
     years = data["fiscal_year_ends"]
     latest = years[-1] if years else None
@@ -226,8 +328,9 @@ def summary_markdown(meta, data, secs, files, summaries, risk_heads, diff, stmt_
         lines += [
             "The most-recent-quarter rows are blank because this filer's 10-K tags no quarterly "
             "period. The SEC dropped the selected-quarterly-financial-data requirement in 2021, "
-            "so most 10-Ks now report the year only; the quarter lives in the 10-Q, and this "
-            "tool reads 10-Ks. Nothing is reconstructed to fill the gap.",
+            "so most 10-Ks now report the year only. Nothing is reconstructed to fill that gap — "
+            "but the quarters filed *since* the year end are read straight out of the 10-Qs, "
+            "under **Trailing twelve months** below.",
             "",
         ]
 
@@ -273,6 +376,8 @@ def summary_markdown(meta, data, secs, files, summaries, risk_heads, diff, stmt_
     if v.get("market_cap_warning"):
         lines += ["> {}".format(v["market_cap_warning"]), ""]
     lines += ["Full bridge, the share-count sources, and the footnote rows: `valuation.md`.", ""]
+
+    lines += ttm_section(data.get("ttm"), v)
 
     if len(years) > 1:
         lines += ["## Revenue and EPS history", "", "| Year end | Revenue ($M) | EPS |", "|---|---|---|"]
@@ -389,13 +494,16 @@ def run(args):
     soup, text = sections.parse(html)
     write(out_dir / "full_text.txt", text)
     secs = sections.pick_sections(text)
-    # The filing's own bold runs tell the condenser which lines are headings.
-    files, summaries = section_files(out_dir, secs, source_url, sections.bold_runs(soup))
+    # The filing's own bold runs tell the condenser which lines are headings,
+    # and the risk index which lines are headlines — one whole-document walk,
+    # not two.
+    bold = sections.bold_runs(soup)
+    files, summaries = section_files(out_dir, secs, source_url, bold)
     print("  sections: {} extracted ({:,} chars of text), {} condensed".format(
         len(files), len(text), len(summaries)))
 
     risk_text = secs.get("1A", {}).get("text", "")
-    risk_heads = sections.risk_headings(soup, risk_text)
+    risk_heads = sections.risk_headings(soup, risk_text, bold)
     if risk_heads:
         write(
             out_dir / "risk_headings.md",
@@ -449,7 +557,8 @@ def run(args):
 
     print("  fetching 10-year XBRL history...")
     facts = client.companyfacts(cik)
-    data = trends.build(facts, max_years=args.years, as_of=filing["report_date"])
+    data = trends.build(facts, max_years=args.years, as_of=filing["report_date"],
+                        with_ttm=not args.no_ttm)
     # Revenue lines the filer tags along a dimension are dropped by the
     # companyfacts API entirely, so they come off the rendered statement.
     income = next((s["table"] for s in stmts if s["name"] == "income_statement"), None)
@@ -463,6 +572,12 @@ def run(args):
     write(out_dir / "trends.md", trends.to_markdown(data, subs["name"]))
     print("  trends: {} fiscal years, {} metrics not tagged".format(
         len(data["fiscal_year_ends"]), len(data["missing"])))
+    if data.get("ttm"):
+        t = data["ttm"]
+        print("  TTM: rolled forward to {} ({}, filed {}) — {} days past the year end".format(
+            t["quarter_end"], t["fiscal_period"], t["quarter_filed"], t["days_stale_at_fy_end"]))
+    elif not args.no_ttm:
+        print("  TTM: none — no 10-Q post-dates this 10-K with a comparable prior period")
 
     print("  share count and valuation...")
     cover, awards = valuation.gather(client, cik, filing, facts)
@@ -475,6 +590,7 @@ def run(args):
     val = valuation.build(
         data["series"], data["derived"], filing["report_date"],
         cover, awards, quote, shares_override=args.shares,
+        ttm=data.get("ttm"), companyfacts=facts,
     )
     write(out_dir / "valuation.json", json.dumps(val, indent=2))
     write(out_dir / "valuation.md", valuation.to_markdown(val, subs["name"], ticker))
@@ -487,6 +603,12 @@ def run(args):
         print("    price: ${:,.2f} — {}".format(quote["price"], quote["source"]))
     print("    market cap {} · EV {}".format(
         valuation._m(val["market_cap"]), valuation._m(val["bridge"]["enterprise_value"])))
+    if val.get("ttm"):
+        tv = val["ttm"]
+        print("    TTM: sales {} · EV/EBITDA {} (FY {}) · P/E {} (FY {})".format(
+            valuation._m(tv["operating"]["sales"]),
+            valuation._x(tv["multiples"]["ev_ebitda"]), valuation._x(val["multiples"]["ev_ebitda"]),
+            valuation._x(tv["multiples"]["pe"]), valuation._x(val["multiples"]["pe"])))
 
     meta = {
         "ticker": ticker,
@@ -536,6 +658,9 @@ def main():
     p.add_argument("--no-price", action="store_true",
                    help="skip the price — everything but market cap, EV and the multiples")
     p.add_argument("--no-diff", action="store_true", help="skip the prior-year risk factor diff")
+    p.add_argument("--no-ttm", action="store_true",
+                   help="skip the trailing-twelve-month roll-forward — the 10-K year only, "
+                        "with nothing from the 10-Qs filed since")
     p.add_argument("--refresh", action="store_true", help="ignore the cache and re-download")
     p.add_argument("--out", help="output directory (default: ../filings)")
     args = p.parse_args()

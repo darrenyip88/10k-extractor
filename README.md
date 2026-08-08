@@ -252,8 +252,46 @@ usually the boilerplate the condenser exists to drop.
 **Most 10-Ks have no quarterly data at all.** The SEC dropped the
 selected-quarterly-financial-data requirement in 2021, so MRQ revenue is blank
 for AAPL, NVDA, TSLA, JPM, KO, MCD, COST and BRK alike. Older filings do tag it
-(Costco's 2017 10-K has its Q4) and the lookup finds those. A 10-Q would have it,
-but a 10-Q is not a 10-K. The row stays blank and says why.
+(Costco's 2017 10-K has its Q4) and the lookup finds those. The row stays blank
+and says why. The quarters filed *after* the year end are a different matter —
+see below.
+
+**The 10-K is up to a year stale, and the fix is the 10-Q, not the 8-K.** An
+earnings 8-K beats the periodic report by about a week (Costco's median lead over
+40 filings since 2016: 7 days for a 10-Q, 13 for a 10-K) and carries no
+machine-readable financials at all — Costco has filed dozens and contributes
+*zero* facts to the XBRL API from any of them, because only the cover page of an
+8-K is tagged. A 10-Q is fully tagged, so `trends.ttm()` rolls the audited year
+forward:
+
+    TTM = fiscal year + year-to-date this year − year-to-date a year ago
+
+Year-to-date, never four discrete quarters. A 10-Q's cash flow statement is
+always cumulative from the year start, so there is no discrete-quarter operating
+cash flow to sum, and the fourth quarter never appears in a 10-Q at all — a
+four-quarter sum is always missing a leg. One shape works for every line on every
+statement. The balance sheet moves to the quarter end too, so the EV bridge isn't
+a fresh numerator over a year-old denominator. It all comes out of the
+`companyfacts` call the run already makes, so it costs **zero extra SEC
+requests**. `--no-ttm` turns it off.
+
+Three traps found building it:
+
+- **Filers abandon concepts without deleting the history.** Uber tagged
+  `RevenueFromContractWithCustomerExcludingAssessedTax` in its 10-Qs only through
+  2019 and reports `Revenues` now. "First concept with any rows" locked onto a
+  series seven years dead and found no quarter to anchor on, so concept selection
+  requires rows *after* the fiscal year end.
+- **Banks tag no revenue in their 10-Qs.** JPMorgan tags `Revenues` in the 10-K
+  and nothing from the revenue list in the 10-Q. Anchoring on revenue alone threw
+  away a net-income roll-forward it can perfectly well support, so the anchor
+  falls back to net income and the lines it can't carry come back in
+  `not_tagged`.
+- **An accounting-standard change inside the window is fatal.** Costco's FY2017
+  returns no TTM, correctly: ASC 606 means the current quarter and its prior-year
+  comparative sit under different concepts, and differencing them would subtract
+  two different definitions of revenue. The two periods must come from one
+  concept or the answer is refused.
 
 **A rendered statement can put the quarters before the year.** Costco's 2017
 income statement opens with seven "3 Months Ended" columns and doesn't reach the
@@ -283,6 +321,10 @@ is exactly what made it look like a Python install problem.
 
 ## Not built
 
-Only 10-Ks — no 10-Qs, 8-Ks, or proxies. No Exhibit 21 subsidiary parsing. Note
+10-K documents only. The 10-Q contributes numbers (the TTM roll-forward above)
+but none of its text is parsed, and no 8-K or proxy is read at all. An 8-K
+monitor — Item 5.02 departures, 2.01 closings, 4.02 non-reliance, the events with
+no scheduled filing — would be a separate tool, not a bigger version of this one.
+No Exhibit 21 subsidiary parsing. Note
 tables are behind `--all-tables` rather than on by default (free, but ~70 extra
 requests and a lot of files).

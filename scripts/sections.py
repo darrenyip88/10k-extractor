@@ -98,19 +98,21 @@ def bold_runs(soup):
     return [_flat(t) for t in out if _flat(t)]
 
 
-def risk_headings(soup, risk_text):
+def risk_headings(soup, risk_text, bold=None):
     """The bolded headlines inside Item 1A — a ~60-line index of what the
     company is actually worried about, instead of 70k characters of prose.
 
     Every risk factor gets a bold one-sentence headline; body prose does not.
     So: collect bold runs document-wide, keep the ones that also appear inside
-    the Item 1A text.
+    the Item 1A text. `bold` lets a caller that already ran `bold_runs(soup)`
+    (the condenser needs it too) pass the result instead of walking the same
+    tree twice.
     """
     if not risk_text:
         return []
     haystack = _flat(risk_text)
     out, seen = [], set()
-    for head in bold_runs(soup):
+    for head in bold if bold is not None else bold_runs(soup):
         if not (30 <= len(head) <= 400) or head in seen:
             continue
         if head not in haystack:

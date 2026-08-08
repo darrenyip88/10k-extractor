@@ -76,6 +76,17 @@ ENDING_ROW_RE = re.compile(
 # Roll-forwards open with the prior year's closing balance under a label that
 # otherwise looks identical ("Outstanding, January 1").
 OPENING_ROW_RE = re.compile(r"(january 1|jan\.? 1|beginning|start of|opening)", re.I)
+# The other way filers write that opening balance: the prior year's number, but
+# named for the year it closed. Costco stacks "Outstanding at the end of 2024"
+# above "Outstanding at the end of 2025" — no opening keyword to catch, and a
+# year of vesting left the opening balance the larger of the two, so the
+# largest-row rule picked it. Where balance rows carry years, only the latest
+# year is a closing balance. Rows with no year in the label are always kept, so
+# a table labeled by month is left to OPENING_ROW_RE.
+# ponytail: a label naming a plan year ("Outstanding under the 2019 Plan") would
+# read as an old balance; hasn't been seen, and ENDING_ROW_RE anchors at the
+# start of the label. Match on the column date instead if one ever shows up.
+YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
 OPTION_RE = re.compile(r"option", re.I)
 SCALE_RE = re.compile(r"shares in (thousand|million|billion)s?", re.I)
 SCALES = {"thousand": 1e3, "million": 1e6, "billion": 1e9}
@@ -190,12 +201,17 @@ def class_gap(cover):
 def award_counts(reports):
     """Options outstanding and unvested RSUs from the share-comp footnote.
 
-    `reports` is [(short_name, parsed_table)]. Two rules, both crude on purpose:
-    the largest qualifying row in a report wins, because one report often holds
-    several roll-forwards (JPMorgan's RSUs sit above its much smaller SARs);
-    and one row per report is then added up, because filers split RSUs and PSUs
-    across separate tables and taking only the biggest would drop a whole class
-    of awards.
+    `reports` is [(short_name, parsed_table)]. Three rules, all crude on purpose:
+    a balance row named for an older year than its neighbours is an opening
+    balance and drops out; the largest row still standing in a report wins,
+    because one report often holds several roll-forwards (JPMorgan's RSUs sit
+    above its much smaller SARs); and one row per report is then added up,
+    because filers split RSUs and PSUs across separate tables and taking only
+    the biggest would drop a whole class of awards.
+
+    Order matters. Dropping opening balances first is what keeps the largest-row
+    rule honest: a company that vests more than it grants shrinks its pool over
+    the year, so its opening balance is the bigger number.
 
     Every contributing row is returned alongside the picks. Filers label these a
     dozen different ways, and a printed table beats a confident wrong number.
@@ -221,6 +237,10 @@ def award_counts(reports):
                         "is_option": bool(OPTION_RE.search(row[0]) or OPTION_RE.search(short)),
                     })
                     break
+        dated = [(YEAR_RE.search(r["label"]), r) for r in rows]
+        latest = max((int(m.group()) for m, _ in dated if m), default=None)
+        if latest:
+            rows = [r for m, r in dated if not m or int(m.group()) == latest]
         if rows:
             found.append(max(rows, key=lambda r: r["shares"]))
 
@@ -368,8 +388,102 @@ def _sum(*values):
     return sum(present) if present else None
 
 
-def build(series, derived, year, cover, awards, quote, shares_override=None):
-    """-> the whole valuation dict for one fiscal year."""
+def ttm_block(ttm, companyfacts, price, shares_for_cap, awards):
+    """The bridge and the multiples, rebuilt on the trailing twelve months.
+
+    Everything a 10-Q restates moves: earnings, the balance sheet, and the
+    cover-page share count. Everything it doesn't keeps the annual value and
+    says so — the price (no filing carries a live one) and the option and RSU
+    counts (only the annual share-based-compensation footnote carries those, so
+    the fully-diluted figure here is an annual overhang on a quarterly base).
+
+    `shares_for_cap` is whatever the annual block resolved, so every guard it
+    applies — the multi-class refusal above all — is inherited rather than
+    re-implemented. None in, None out.
+    """
+    if not ttm:
+        return None
+
+    q_cover = cover_shares_from_facts(companyfacts or {}, ttm.get("accession"))
+    shares, shares_basis = shares_for_cap, "carried over from the 10-K cover page"
+    if shares_for_cap is not None and q_cover:
+        shares = q_cover["total"]
+        shares_basis = "10-Q cover page, as of {}".format(q_cover["as_of"])
+    fully_diluted = _sum(
+        shares, awards.get("options_outstanding"), awards.get("rsus_unvested")
+    ) if shares else None
+
+    d, v, bal = ttm["derived"], ttm["values"], ttm["balance"]
+    market_cap = price * shares if price and shares else None
+    debt, cash = d.get("total_debt"), bal.get("cash")
+    preferred, minority, sti = d.get("preferred"), d.get("minority_interest"), \
+        bal.get("short_term_investments")
+
+    gaps = [name for name, x in (("total debt", debt), ("cash and equivalents", cash))
+            if x is None]
+    ev = _sum(market_cap, debt, preferred, minority, -cash if cash is not None else None) \
+        if market_cap and not gaps else None
+
+    sales, ebit, ebitda = v.get("revenue"), d.get("ebit"), d.get("ebitda")
+    fcf, eps = d.get("free_cash_flow"), v.get("eps_diluted")
+
+    def over(num, den):
+        return round(num / den, 1) if num is not None and den else None
+
+    return {
+        "quarter_end": ttm["quarter_end"],
+        "quarter_filed": ttm["quarter_filed"],
+        "fiscal_period": ttm["fiscal_period"],
+        "accession": ttm["accession"],
+        "basis": ttm["basis"],
+        "shares": shares,
+        "shares_basis": shares_basis,
+        "fully_diluted": fully_diluted,
+        "market_cap": market_cap,
+        "bridge": {
+            "market_cap": market_cap,
+            "total_debt": debt,
+            "debt_basis": d.get("debt_basis"),
+            "preferred": preferred,
+            "minority_interest": minority,
+            "cash_and_equivalents": cash,
+            "enterprise_value": ev,
+            "missing_components": gaps,
+            "short_term_investments": sti,
+            "enterprise_value_net_of_investments": ev - sti if ev is not None and sti is not None else None,
+            "finance_leases": bal.get("finance_lease_liability"),
+            "operating_leases": bal.get("operating_lease_liability"),
+        },
+        "operating": {
+            "sales": sales,
+            "ebit": ebit,
+            "ebit_basis": d.get("ebit_basis"),
+            "ebitda": ebitda,
+            "d_and_a": v.get("d_and_a"),
+            "net_income": v.get("net_income"),
+            "free_cash_flow": fcf,
+            "eps_diluted": eps,
+        },
+        "multiples": {
+            "ev_sales": over(ev, sales),
+            "ev_ebit": over(ev, ebit),
+            "ev_ebitda": over(ev, ebitda),
+            "ev_fcf": over(ev, fcf),
+            "pe": round(price / eps, 1) if price and eps else None,
+            "fcf_yield_pct": round(fcf / market_cap * 100, 1) if fcf and market_cap else None,
+        },
+        "not_tagged": ttm.get("not_tagged", []),
+    }
+
+
+def build(series, derived, year, cover, awards, quote, shares_override=None,
+          ttm=None, companyfacts=None):
+    """-> the whole valuation dict for one fiscal year.
+
+    `ttm` adds a parallel block off the same price and award counts, rebuilt on
+    the trailing twelve months. It never overwrites an annual figure — the two
+    sit side by side so the gap between them stays visible.
+    """
     def val(name):
         return series.get(name, {}).get("values", {}).get(year)
 
@@ -411,9 +525,9 @@ def build(series, derived, year, cover, awards, quote, shares_override=None):
     # bank. Refuse to print a number rather than print a confident wrong one.
     gaps = [name for name, v in (("total debt", debt), ("cash and equivalents", cash))
             if v is None]
-    ev = _sum(market_cap, debt, preferred, minority, -cash if cash else None) \
+    ev = _sum(market_cap, debt, preferred, minority, -cash if cash is not None else None) \
         if market_cap and not gaps else None
-    ev_net_investments = ev - sti if ev is not None and sti else None
+    ev_net_investments = ev - sti if ev is not None and sti is not None else None
 
     sales, ebit, ebitda = val("revenue"), d.get("ebit"), d.get("ebitda")
     fcf, eps = d.get("free_cash_flow"), val("eps_diluted")
@@ -473,6 +587,7 @@ def build(series, derived, year, cover, awards, quote, shares_override=None):
             else None,
             "fcf_yield_pct": round(fcf / market_cap * 100, 1) if fcf and market_cap else None,
         },
+        "ttm": ttm_block(ttm, companyfacts, price, shares_for_cap, awards),
     }
 
 
@@ -640,7 +755,100 @@ def to_markdown(v, company, ticker):
                 _x(m["pe_fully_diluted"])),
             "",
         ]
+    lines += _ttm_markdown(v.get("ttm"), v)
     return "\n".join(lines)
+
+
+def _ttm_markdown(t, v):
+    """The trailing-twelve-month restatement, appended to valuation.md.
+
+    Everything above stays exactly as filed in the 10-K. This section is the
+    same arithmetic on newer inputs, printed alongside rather than instead, so
+    the size of the gap between the audited year and the current run-rate is
+    the thing you actually read off the page.
+    """
+    if not t:
+        return [
+            "## Trailing twelve months",
+            "",
+            "No 10-Q post-dates this 10-K with a comparable prior-year period, so there is "
+            "nothing to roll the year forward with and no TTM column is shown. Everything "
+            "above is the fiscal year as filed.",
+            "",
+        ]
+    o, m, b = t["operating"], t["multiples"], t["bridge"]
+    fy_o, fy_m = v["operating"], v["multiples"]
+
+    def delta(new, old):
+        if new is None or old is None or not old:
+            return "—"
+        return "{:+.1f}%".format((new - old) / abs(old) * 100)
+
+    lines = [
+        "## Trailing twelve months",
+        "",
+        "The 10-K is audited and up to a year stale. These are the same figures rolled "
+        "forward with the 10-Qs filed since — **{}** — on the arithmetic:".format(t["basis"]),
+        "",
+        "> TTM = fiscal year + year-to-date this year − year-to-date a year ago",
+        "",
+        "Year-to-date rather than four discrete quarters, because a 10-Q's cash flow "
+        "statement is always cumulative from the year start and the fourth quarter never "
+        "appears in a 10-Q at all. Source: {} {}, filed {} (accession {}).".format(
+            t["fiscal_period"] or "the latest 10-Q", t["quarter_end"], t["quarter_filed"],
+            t["accession"]),
+        "",
+        "| Metric | FY {} | TTM to {} | Change |".format(v["fiscal_year_end"], t["quarter_end"]),
+        "|---|---|---|---|",
+        "| Sales | {} | {} | {} |".format(
+            _m(fy_o["sales"]), _m(o["sales"]), delta(o["sales"], fy_o["sales"])),
+        "| EBIT | {} | {} | {} |".format(
+            _m(fy_o["ebit"]), _m(o["ebit"]), delta(o["ebit"], fy_o["ebit"])),
+        "| EBITDA | {} | {} | {} |".format(
+            _m(fy_o["ebitda"]), _m(o["ebitda"]), delta(o["ebitda"], fy_o["ebitda"])),
+        "| Free cash flow | {} | {} | {} |".format(
+            _m(fy_o["free_cash_flow"]), _m(o["free_cash_flow"]),
+            delta(o["free_cash_flow"], fy_o["free_cash_flow"])),
+        "| Net income | {} | {} | {} |".format(
+            _m(fy_o["net_income"]), _m(o["net_income"]),
+            delta(o["net_income"], fy_o["net_income"])),
+        "| EPS (diluted) | {} | {} | {} |".format(
+            "—" if fy_o["eps_diluted"] is None else "${:,.2f}".format(fy_o["eps_diluted"]),
+            "—" if o["eps_diluted"] is None else "${:,.2f}".format(o["eps_diluted"]),
+            delta(o["eps_diluted"], fy_o["eps_diluted"])),
+        "",
+        "The balance sheet moves with them — debt and cash below are the quarter's, not the "
+        "year end's, so the bridge is not a fresh numerator over a stale denominator.",
+        "",
+        "| | |",
+        "|---|---|",
+        "| Shares | {} — {} |".format(
+            "—" if t["shares"] is None else "{:,.0f}".format(t["shares"]), t["shares_basis"]),
+        "| Market cap | {} |".format(_m(t["market_cap"])),
+        "| + total debt | {} |".format(_m(b["total_debt"])),
+        "| − cash and equivalents | {} |".format(_m(b["cash_and_equivalents"])),
+        "| **Enterprise value** | **{}** |".format(_m(b["enterprise_value"])),
+        "",
+        "| Multiple | FY {} | TTM |".format(v["fiscal_year_end"]),
+        "|---|---|---|",
+        "| EV / Sales | {} | {} |".format(_x(fy_m["ev_sales"]), _x(m["ev_sales"])),
+        "| EV / EBIT | {} | {} |".format(_x(fy_m["ev_ebit"]), _x(m["ev_ebit"])),
+        "| EV / EBITDA | {} | {} |".format(_x(fy_m["ev_ebitda"]), _x(m["ev_ebitda"])),
+        "| EV / FCF | {} | {} |".format(_x(fy_m["ev_fcf"]), _x(m["ev_fcf"])),
+        "| P/E | {} | {} |".format(_x(fy_m["pe"]), _x(m["pe"])),
+        "",
+        "The price is the same one used above — a 10-Q carries no share price either, and "
+        "nothing here is a live quote. Pass `--price` to value both columns at an outside "
+        "number.",
+        "",
+    ]
+    if t["not_tagged"]:
+        lines += [
+            "Not tagged in this filer's 10-Qs, so left out of the TTM column: {}. "
+            "The annual figures above are unaffected.".format(", ".join(t["not_tagged"])),
+            "",
+        ]
+    return lines
 
 
 # --- self-check ----------------------------------------------------------
@@ -755,8 +963,29 @@ def demo():
     split = award_counts([("RSU Transactions (Details)", cost), ("SARs Activity (Details)", jpm)])
     # One row per report, added: two filers' worth of tables here, but the same
     # shape as one filer splitting RSUs and PSUs across two tables.
-    assert split["rsus_unvested"] == 2799e3 + 42560000, split["rsus_unvested"]
-    assert [r["shares"] for r in split["rows"]] == [2799e3, 42560000], split["rows"]
+    # Costco's 2,308 is both the closing row *and* the smaller of the two, so
+    # this fails if the year filter stops running before the largest-row pick.
+    assert split["rsus_unvested"] == 2308e3 + 42560000, split["rsus_unvested"]
+    assert [r["shares"] for r in split["rows"]] == [2308e3, 42560000], split["rows"]
+
+    # Two roll-forwards in one report, both dated: the year filter keeps both
+    # closing rows, and the largest-row rule still picks RSUs over the SARs
+    # block underneath it.
+    stacked = {
+        "units": "Equity Award Activity (Details) shares in Thousands",
+        "columns": ["Line item", "Dec. 31, 2025"],
+        "rows": [
+            ["Outstanding at the end of 2024", "9000"],
+            ["Outstanding at the end of 2025", "8000"],
+            ["Outstanding at the end of 2024", "500"],
+            ["Outstanding at the end of 2025", "400"],
+        ],
+    }
+    assert award_counts([("Equity Award Activity", stacked)])["rsus_unvested"] == 8000e3
+
+    # No year anywhere in the labels: the filter sits out and OPENING_ROW_RE
+    # still has to do the work on its own.
+    assert award_counts([("SARs Activity (Details)", jpm)])["rsus_unvested"] == 42560000
 
     series = {
         "cash": {"values": {"2025-09-27": 30e9}},
@@ -828,7 +1057,50 @@ def demo():
                     awards, px)
     assert "it is a floor" in to_markdown(floored, "Test Co", "TEST")
 
-    print("ok: valuation — cover/class split, footnote scaling, filing price, EV bridge")
+    # --- the trailing-twelve-month block ---------------------------------
+    good = cover_shares_from_facts(facts, "right")
+    fake_ttm = {
+        "quarter_end": "2026-05-10", "quarter_filed": "2026-06-03", "fiscal_period": "Q3",
+        "accession": "q3", "basis": "FY + YTD − prior YTD", "not_tagged": ["gross_profit"],
+        "values": {"revenue": 300e9, "net_income": 60e9, "eps_diluted": 5.0,
+                   "d_and_a": 10e9, "operating_cash_flow": 80e9, "capex": 20e9},
+        "balance": {"cash": 40e9, "short_term_investments": 5e9,
+                    "finance_lease_liability": None, "operating_lease_liability": None},
+        "derived": {"ebit": 90e9, "ebit_basis": "operating income, as the company tagged it",
+                    "ebitda": 100e9, "free_cash_flow": 60e9, "total_debt": 25e9,
+                    "debt_basis": "= long-term debt (noncurrent)", "preferred": None,
+                    "minority_interest": None},
+    }
+    with_ttm = build(series, derived, "2025-09-27", good, awards, {"price": 200.0},
+                     ttm=fake_ttm, companyfacts=facts)
+    t = with_ttm["ttm"]
+    # The annual block must be untouched by the presence of a TTM block.
+    plain = build(series, derived, "2025-09-27", good, awards, {"price": 200.0})
+    assert with_ttm["multiples"] == plain["multiples"], "TTM leaked into the annual figures"
+    assert with_ttm["bridge"] == plain["bridge"], "TTM leaked into the annual bridge"
+    # Bridge rebuilt on the quarter's balance sheet: cap + 25 - 40.
+    assert t["bridge"]["enterprise_value"] == t["market_cap"] + 25e9 - 40e9
+    assert t["multiples"]["ev_ebitda"] == round(t["bridge"]["enterprise_value"] / 100e9, 1)
+    assert t["multiples"]["pe"] == 40.0, t["multiples"]["pe"]
+    assert t["not_tagged"] == ["gross_profit"]
+    md = to_markdown(with_ttm, "Test Co", "TEST")
+    assert "## Trailing twelve months" in md and "TTM = fiscal year" in md
+
+    # A multi-class filer refuses a TTM market cap for the same reason it
+    # refuses the annual one — the guard is inherited, not re-implemented.
+    blocked_ttm = build(series, derived, "2025-09-27", cover, awards, {"price": 500.0},
+                        ttm=fake_ttm, companyfacts=facts)
+    assert blocked_ttm["ttm"]["market_cap"] is None, "multi-class guard skipped on TTM"
+    assert blocked_ttm["ttm"]["bridge"]["enterprise_value"] is None
+
+    # No 10-Q to roll forward with: the section says so rather than vanishing,
+    # and every annual figure still renders.
+    none_md = to_markdown(plain, "Test Co", "TEST")
+    assert plain["ttm"] is None
+    assert "No 10-Q post-dates this 10-K" in none_md and "Enterprise value" in none_md
+
+    print("ok: valuation — cover/class split, footnote scaling, filing price, "
+          "EV bridge, TTM block")
 
 
 if __name__ == "__main__":

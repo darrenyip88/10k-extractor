@@ -31,6 +31,15 @@ REPORT_RE = re.compile(r"<Report[^>]*>(.*?)</Report>", re.S | re.I)
 # ShortName keyword -> stable output filename, so income_statement.md is always
 # income_statement.md regardless of what the company calls it.
 CANONICAL = [
+    # "operations" first: some filers render one combined report, "...Statements
+    # of Operations and Comprehensive Income" — that title also matches
+    # "comprehensive income" below, and checking that first mis-filed the whole
+    # income statement (revenue, opex, net income) as comprehensive_income.md,
+    # leaving nothing named income_statement for later lookups (e.g. the
+    # membership-fee line search) to find. A standalone comprehensive-income
+    # statement is never titled with "operations", so this ordering doesn't
+    # touch that case.
+    ("operations", "income_statement"),
     ("comprehensive income", "comprehensive_income"),
     ("cash flow", "cash_flow"),
     ("balance sheet", "balance_sheet"),
@@ -38,7 +47,6 @@ CANONICAL = [
     ("stockholders' equity", "equity"),
     ("shareholders' equity", "equity"),
     ("equity", "equity"),
-    ("operations", "income_statement"),
     ("income", "income_statement"),
     ("earnings", "income_statement"),
 ]
@@ -231,7 +239,11 @@ def fetch_statements(client, cik, accession_plain, include_disclosures=False):
         # Information". Match on both words, not the exact phrase.
         low = rep["short"].lower()
         if "audit" in low and "information" in low:
-            table = parse_report(client.filing_file(cik, accession_plain, rep["file"]))
+            try:
+                table = parse_report(client.filing_file(cik, accession_plain, rep["file"]))
+            except Exception as e:  # same rule as the loop below: don't kill the run over one report
+                print("  warning: could not parse {} ({}): {}".format(rep["file"], rep["short"], e))
+                break
             if table:
                 auditor = {r[0]: r[1] for r in table["rows"] if len(r) > 1 and r[1]}
             break

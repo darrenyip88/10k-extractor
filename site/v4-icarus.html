@@ -51,6 +51,19 @@ a{color:inherit}
 ::selection{background:var(--cream);color:var(--void)}
 :focus-visible{outline:1.5px solid var(--cream);outline-offset:3px}
 
+/* Off-canvas until a keyboard reaches it. Same hairline rectangle as the CTA —
+   a skip link that arrives in browser-default blue would be the one thing on
+   the page from outside the world. */
+.skip{
+  position:absolute;left:var(--pad);top:.6rem;z-index:9;
+  transform:translateY(-160%);
+  font-family:var(--sans);font-weight:600;font-size:.625rem;
+  letter-spacing:.2em;text-transform:uppercase;color:var(--cream);
+  background:var(--void);border:1px solid var(--cream);
+  padding:.55rem .85rem;text-decoration:none;
+}
+.skip:focus{transform:none}
+
 /* one tracked micro size for every label on the page — the plate allows the
    display serif and this, and nothing in between */
 .micro{
@@ -227,13 +240,13 @@ a{color:inherit}
   margin:0;font-family:var(--serif);font-weight:400;
   font-size:clamp(2.4rem,5vw,4.5rem);
   line-height:1.0;letter-spacing:-.015em;color:var(--cream);
-  max-width:11ch;
+  max-width:11ch;text-wrap:balance;
 }
 /* "10-K" is a name, not a hyphenated word — it must never break at the rule */
 .hero__copy h1 .nb{white-space:nowrap}
 .hero__copy .deck{
   margin:clamp(1.3rem,3vh,1.9rem) 0 0;max-width:44ch;
-  font-size:.8125rem;line-height:1.7;color:var(--dim);
+  font-size:.8125rem;line-height:1.7;color:var(--dim);text-wrap:pretty;
 }
 
 /* the CTA: one small hairline rectangle, no fill, no second button.
@@ -242,6 +255,12 @@ a{color:inherit}
   display:flex;align-items:stretch;
   margin:clamp(1.5rem,3.4vh,2.2rem) 0 0;
   max-width:23rem;border:1px solid var(--cream);
+  /* Opaque, alone on the page. The planets are placed to miss the centred
+     reading column, but the hero copy is flush left in the outer margin where
+     they live — and one drifting through the transparent field put a sphere
+     inside the only control on the site. The ground is the same colour, so
+     this shows as nothing except the field staying empty. */
+  background:var(--void);
 }
 .cta input{
   flex:1 1 auto;min-width:0;
@@ -262,6 +281,9 @@ a{color:inherit}
   transition:background-color .22s cubic-bezier(.22,1,.36,1),color .22s cubic-bezier(.22,1,.36,1);
 }
 .cta button:hover:not(:disabled){background:var(--cream);color:var(--void)}
+/* pressed feedback: 1px down, no scale. A control with a hairline border and no
+   fill has nothing to squash — a push is the only physical move it can make */
+.cta button:active:not(:disabled){transform:translateY(1px)}
 .cta button:disabled{color:var(--faint);cursor:default}
 .cta:focus-within{outline:1px solid var(--cream);outline-offset:2px}
 
@@ -271,6 +293,7 @@ a{color:inherit}
   cursor:pointer;border-bottom:1px solid var(--hair);
 }
 .hint button:hover{border-bottom-color:var(--cream)}
+.hint button:active{transform:translateY(1px)}
 .hint code{font-family:var(--mono);font-size:.9em}
 
 /* Narrow: the figure becomes a real grid row above the copy instead of a layer
@@ -333,7 +356,7 @@ a{color:inherit}
 .filing__head h2{
   margin:0 0 .5rem;font-family:var(--serif);font-weight:400;
   font-size:clamp(1.7rem,3.6vw,2.6rem);line-height:1.1;
-  letter-spacing:-.01em;color:var(--cream);
+  letter-spacing:-.01em;color:var(--cream);text-wrap:balance;
 }
 .filing__head .sub{margin:0;font-size:.6875rem;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
 .filing__head .src{margin:.55rem 0 0;font-size:.75rem;color:var(--dim)}
@@ -439,6 +462,7 @@ a{color:inherit}
   transition:color .18s,border-color .18s;
 }
 .read .swap:hover{color:var(--cream);border-bottom-color:var(--cream)}
+.read .swap:active{transform:translateY(1px)}
 
 /* paths like statements/consolidated_balance_sheets_parenthetical.json are
    longer than any sensible column, so the name wraps and the size stays put */
@@ -468,10 +492,12 @@ a{color:inherit}
 .entry h3{
   order:1;margin:0;font-family:var(--serif);font-weight:400;
   font-size:clamp(1.3rem,2.6vw,1.85rem);line-height:1.14;
-  letter-spacing:-.01em;color:var(--cream);
+  letter-spacing:-.01em;color:var(--cream);text-wrap:balance;
 }
 .entry .file{order:2;font-family:var(--mono);font-size:.6875rem;letter-spacing:.04em;color:var(--faint)}
-.entry p{order:3;margin:0;font-size:.9375rem;line-height:1.65;color:var(--dim);max-width:64ch}
+/* pretty, not balance: these run past six lines, where balance stops applying
+   anyway — this only keeps a single word off the last line */
+.entry p{order:3;margin:0;font-size:.9375rem;line-height:1.65;color:var(--dim);max-width:64ch;text-wrap:pretty}
 @media (min-width:48rem){
   .entry{grid-template-columns:11rem 1fr;column-gap:clamp(1.5rem,4vw,3rem)}
   .entry .file{grid-row:1/4;grid-column:1;padding-top:.55rem}
@@ -486,7 +512,7 @@ a{color:inherit}
 .statement p{
   margin:0;font-family:var(--serif);font-weight:400;
   font-size:clamp(1.05rem,1.8vw,1.3rem);line-height:1.55;
-  color:var(--cream);max-width:60ch;
+  color:var(--cream);max-width:60ch;text-wrap:pretty;
 }
 
 /* ---- close ------------------------------------------------------------- */
@@ -540,6 +566,8 @@ FIRST VIEWPORT: figure right, cropped by the top and bottom edges, its wing
 FORM: classical-glitch. Pinned by the user from the Icarus plate.
 -->
 
+<a class="skip" href="#ticker">Skip to the ticker box</a>
+
 <header class="top">
   <span class="wordmark">10K&nbsp;AI</span>
   <nav class="micro">
@@ -575,15 +603,20 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
       <input id="ticker" name="ticker" type="text" placeholder="Ticker"
              maxlength="10" spellcheck="false" autocapitalize="characters"
              aria-label="Ticker symbol" required>
-      <button type="submit" id="run-btn"><span class="pill__label">Pull the filing</span></button>
+      <button type="submit" id="run-btn"><span class="btn__label">Pull the filing</span></button>
     </form>
 
+    <!-- The four hardcoded tickers are the fallback, for a static server with
+         no /api/cached behind it. With the real server they are replaced by
+         what is actually on disk, which comes back in ~0.3s instead of
+         fifteen seconds cold. -->
     <p class="hint">
-      Straight from SEC EDGAR — no key, no quota. Try
+      Straight from SEC EDGAR — no key, no quota.
+      <span id="picks">Try
       <button type="button" data-fill="AAPL">AAPL</button>,
       <button type="button" data-fill="NVDA">NVDA</button>,
       <button type="button" data-fill="JPM">JPM</button> or
-      <button type="button" data-fill="BRK.B">BRK.B</button>.
+      <button type="button" data-fill="BRK.B">BRK.B</button>.</span>
       From a terminal: <code>./run_10k.sh AAPL</code>
     </p>
   </div>
@@ -593,7 +626,11 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
 
 <p class="status" id="status" role="status" aria-live="polite"></p>
 
-<section class="filing" id="filing" hidden aria-live="polite"></section>
+<!-- No aria-live here. This fills with a whole filing — eight metrics, three
+     tables, the risk diff — and a polite region announces all of it. The status
+     line above already says the extraction finished; the result is then read on
+     request like any other page content. -->
+<section class="filing" id="filing" hidden aria-label="Extracted filing"></section>
 
 <section class="band" id="output">
   <h2 class="micro">What lands in the folder</h2>
@@ -650,6 +687,7 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
     </div>
   </div>
 </section>
+</main>
 
 <footer class="close">
   <div class="rule" role="presentation"></div>
@@ -659,14 +697,13 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
        none. Fill this in before the site goes anywhere public. -->
   <p>Data from SEC EDGAR. Extraction only — not investment advice.</p>
 </footer>
-</main>
 
 <script>
 (function(){
   const form   = document.getElementById('run-form');
   const input  = document.getElementById('ticker');
   const btn    = document.getElementById('run-btn');
-  const label  = btn.querySelector('.pill__label');
+  const label  = btn.querySelector('.btn__label');
   const status = document.getElementById('status');
   const out    = document.getElementById('filing');
 
@@ -841,7 +878,8 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
     if (L.mrq_revenue_m == null){
       parts.push('<p class="runstat">No quarterly period is tagged in this 10-K, so the ' +
         'most-recent-quarter rows are blank. The SEC dropped the selected-quarterly-data ' +
-        'requirement in 2021 — the quarter is in the 10-Q, and this tool reads 10-Ks.</p>');
+        'requirement in 2021 — the quarter is in the 10-Q. Quarters filed <em>since</em> the ' +
+        'year end are read out of those 10-Qs under Trailing twelve months, below.</p>');
     }
 
     const V = d.valuation;
@@ -869,6 +907,54 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
           '; market cap above is that float restated. Nothing on this page is a live quote.</p>');
       }
       if (V.warning) parts.push('<p class="runstat">' + esc(V.warning) + '</p>');
+    }
+
+    // Trailing twelve months. Strictly additive — every 10-K figure above stays
+    // put, and the FY column rides along in each row so the page shows the gap
+    // between the audited year and the current run-rate, not just the newer
+    // number on its own.
+    const T = d.ttm;
+    if (T){
+      const g = v => v == null ? none :
+        '<span class="delta">' + (v >= 0 ? '+' : '') + v.toFixed(1) + '%</span>';
+      const cell = (v, isMoney) => v == null ? none : (isMoney ? usdM(v / 1e6) : '$' + v.toFixed(2));
+      parts.push('<h3>Trailing twelve months</h3>' +
+        '<p class="runstat">The 10-K year rolled forward with every 10-Q filed since — <strong>' +
+          esc(T.basis) + '</strong>. Year-to-date rather than four discrete quarters, because a ' +
+          '10-Q&rsquo;s cash flow statement is always cumulative and the fourth quarter never ' +
+          'appears in one. Source: ' + esc(T.fiscal_period || 'latest 10-Q') + ' ended ' +
+          esc(T.quarter_end) + ', filed ' + esc(T.quarter_filed) + ' — ' +
+          esc(T.days_past_year_end) + ' days past the year end, and no extra SEC requests.</p>' +
+        '<table class="ftable"><thead><tr><th>Metric</th><th>FY ' + esc(d.period) + '</th>' +
+          '<th>TTM to ' + esc(T.quarter_end) + '</th><th>YTD vs prior-year YTD</th></tr></thead><tbody>' +
+        (T.rows || []).map(r => '<tr><td>' + esc(r.label) + '</td><td>' + cell(r.fy, r.money) +
+          '</td><td>' + cell(r.ttm, r.money) + '</td><td>' + g(r.growth_pct) + '</td></tr>').join('') +
+        '</tbody></table>');
+
+      const V2 = d.valuation;
+      if (V2 && T.ev_m != null){
+        const x = v => v == null ? none : v.toFixed(1) + '×';
+        parts.push('<table class="ftable"><thead><tr><th>Multiple</th>' +
+          '<th>FY ' + esc(d.period) + '</th><th>TTM</th></tr></thead><tbody>' +
+          [['Enterprise value', usdM(V2.ev_m), usdM(T.ev_m)],
+           ['EV / Sales',   x(V2.ev_sales),  x(T.ev_sales)],
+           ['EV / EBITDA',  x(V2.ev_ebitda), x(T.ev_ebitda)],
+           ['EV / EBIT',    x(V2.ev_ebit),   x(T.ev_ebit)],
+           ['P/E',          x(V2.pe),        x(T.pe)]]
+            .map(r => '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td><td>' + r[2] + '</td></tr>').join('') +
+          '</tbody></table>' +
+          '<p class="runstat">The balance sheet moves with the earnings — debt and cash here ' +
+          'are the quarter&rsquo;s, not the year end&rsquo;s, so a fresh numerator is not ' +
+          'sitting over a stale bridge. Shares: ' +
+          (T.shares == null ? none : num(T.shares / 1e6, 1) + 'M') +
+          (T.shares_basis ? ' (' + esc(T.shares_basis) + ')' : '') +
+          '. The price is the same one above; a 10-Q states one no more than a 10-K does.</p>');
+      }
+      if ((T.not_tagged || []).length){
+        parts.push('<p class="runstat">Not tagged in this filer&rsquo;s 10-Qs, so left out of ' +
+          'the TTM column: ' + esc(T.not_tagged.join(', ')) +
+          '. The annual figures are unaffected.</p>');
+      }
     }
 
     if (d.history && d.history.length){
@@ -961,19 +1047,39 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
     }
   });
 
-  document.querySelectorAll('[data-fill]').forEach(b => {
-    b.addEventListener('click', () => {
-      input.value = b.dataset.fill;
-      form.requestSubmit();
-    });
+  // delegated, because the pick list is replaced once /api/cached answers
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-fill]');
+    if (!b) return;
+    input.value = b.dataset.fill;
+    form.requestSubmit();
   });
+
+  // What's already extracted. The route existed and nothing called it, so the
+  // page offered four guesses at what would be fast instead of the answer.
+  // BRK.B lands on disk as BRK-B; the extractor normalises both, so the
+  // directory name submits fine.
+  fetch('/api/cached')
+    .then(r => r.ok ? r.json() : null)
+    .then(d => {
+      const list = ((d && d.cached) || []).map(c => c.ticker);
+      if (!list.length) return;
+      document.getElementById('picks').innerHTML =
+        'Already on disk, so these come back instantly: ' +
+        list.map(t => '<button type="button" data-fill="' + esc(t) + '">' +
+                      esc(t) + '</button>').join(', ') + '.';
+    })
+    .catch(() => {});   // static server, no API — the hardcoded four stand
 
   // /?t=NVDA pulls that filing on load, so a result is a shareable link
   const deep = new URLSearchParams(location.search).get('t');
   if (deep) { input.value = deep.toUpperCase(); form.requestSubmit(); }
 })();
 
-document.querySelectorAll('a[href^="#"]').forEach(a=>{
+// scoped to the two nav links, not every in-page anchor. The skip link has to
+// keep the native jump — preventDefault scrolls the input into view without
+// ever giving it focus, which is the one thing a skip link exists to do.
+document.querySelectorAll('.top nav a[href^="#"]').forEach(a=>{
   a.addEventListener('click',e=>{
     const t=document.querySelector(a.getAttribute('href'));
     if(!t)return;

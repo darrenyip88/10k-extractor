@@ -23,6 +23,7 @@ Stdlib only. No Flask, no new dependencies.
 | `GET /` | serves `v4-icarus.html` |
 | `POST /api/extract` | `{"ticker":"AAPL"}` → runs `scripts/extract_10k.py`, returns the parsed filing as JSON |
 | `GET /api/cached` | tickers already sitting in `filings/` |
+| any 404 | a `#222222` error page, not stdlib's white one |
 | `GET /filings/...` | the extracted files themselves, so the file list on the page is clickable |
 
 `/api/extract` shells out to the same script `./run_10k.sh` calls, so the page
@@ -68,6 +69,31 @@ punctuation belongs to the line above.
 ## Deep links
 
 `/?t=NVDA` pulls that filing on load, so a result is a shareable link.
+
+## The pick list is the cache
+
+`/api/cached` was built and nothing called it. The hint line under the CTA
+hardcoded four tickers as suggestions — a guess at what would be fast, printed
+next to a claim that cached ones are instant. It now asks the route and prints
+what's actually on disk, which is the honest version of the same sentence and
+the page's only empty state. The four stay in the markup as the fallback, so
+`python3 -m http.server` still shows something.
+
+`BRK.B` lands on disk as `BRK-B` and the list prints the directory name. That
+submits fine — `sec_client.normalize_ticker` takes either.
+
+The pick buttons are wired by one delegated listener on `document`, not by
+`querySelectorAll` at load. The list is replaced once the fetch answers, and
+per-node listeners would all be attached to the discarded nodes.
+
+## 404
+
+Stdlib's default error page is black-on-white Courier. In a site that is
+`#222222` edge to edge, that reads as the browser breaking rather than the path
+being wrong. `serve.py` sets `error_message_format` — the handler's own hook, so
+no new route — to a page on the same ground with the same two faces. Every
+literal `%` in that string is doubled; it goes through `%`-formatting, and one
+bare `100%` in the CSS raises instead of rendering.
 
 ## Honest blanks
 
@@ -195,6 +221,21 @@ Planets are kept past ~18% and before ~78% of the width on wide screens. One
 crossing a hairline rule stops reading as a distant body and starts reading as
 dirt.
 
+**That rule was written for the wrong column.** 18–78% is the centred 56rem
+reading column, but the hero copy isn't in it — the headline, the deck and the
+CTA are flush left at `--pad`, which is exactly the outer margin the planets
+were sent to. Five of the eleven sit under 12%, and on a laptop one of them
+drifts straight through the ticker field: a sphere inside the only control on
+the site. `.cta` is now the one opaque box on the page (`background:var(--void)`
+— same colour as the ground, so it shows as nothing except the field staying
+empty). The planets themselves were left alone; over 4.5rem cream serif they
+read fine.
+
+`index.html` had the same bug and needed the opposite fix. That page is flush
+left with a 62rem column and *no* left margin at all, so two planets at 4% and
+6% were sitting on the "Four · Icarus" and "Two · Editorial grid" headings.
+All four moved to the right margin, where the ghosted plate already lives.
+
 ## The motif at hairline scale
 
 `.rule` is the same move: a 1px rule with a band of 5px squares above it,
@@ -216,6 +257,25 @@ the matrix. A figure is grey mush at that size, so the mark is the effect.
   Stepped on purpose — a glitch doesn't ease, and an eased streak reads as a
   loading bar.
 - `prefers-reduced-motion` kills all of it.
+
+Every control now answers a press with `translateY(1px)` — the submit button,
+the ticker picks, the condensed/full swap. A hairline rectangle with no fill has
+nothing to squash, so a push is the only physical move it has.
+
+## Keyboard
+
+A skip link is the first focusable thing on the page, styled as the same
+hairline rectangle as the CTA and off-canvas until it's focused. It points at
+`#ticker`, not at the form — an input is focusable, so the native anchor jump
+puts the cursor in the field.
+
+The smooth-scroll handler is scoped to `.top nav a[href^="#"]` rather than every
+in-page anchor. It calls `preventDefault`, which on the skip link would scroll
+the field into view without ever focusing it — the one thing a skip link is for.
+
+The result section carries `aria-label`, not `aria-live`. It fills with a whole
+filing — eight metrics, three tables, the risk diff — and a polite live region
+announces all of it. The status line above already says the run finished.
 
 ## The CTA
 

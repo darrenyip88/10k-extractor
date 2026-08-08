@@ -27,6 +27,7 @@ RATE_LIMIT_DELAY = 0.15  # SEC allows 10 req/s; 0.15s leaves headroom
 MAX_RETRIES = 3
 RETRY_STATUS = {429, 500, 502, 503, 504}
 MAX_OVERFLOW_FILES = 5  # how many archive pages to walk looking for older 10-Ks
+TICKER_MAP_MAX_AGE = 86400  # SEC adds tickers through the day; filings never change
 CACHE_DIR = Path(__file__).resolve().parent.parent / ".cache"
 
 TICKER_MAP_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -60,12 +61,27 @@ class SECClient:
         tail = re.sub(r"[^A-Za-z0-9._-]", "_", url.rsplit("/", 1)[-1])[:40]
         return CACHE_DIR / f"{hashlib.sha256(url.encode()).hexdigest()[:16]}_{tail}"
 
-    def get(self, url, binary=False):
-        """Fetch a URL, using the disk cache unless --refresh was passed."""
+    def get(self, url, binary=False, max_age=None):
+        """Fetch a URL, using the disk cache unless --refresh was passed.
+
+        `max_age` (seconds) treats an older cache entry as a miss. Nothing
+        else here needs it — filings are immutable once accepted — but the
+        ticker map isn't a filing: SEC adds tickers through the day, and
+        without this a company that IPO'd after the map was first cached
+        reads as "not in SEC's company_tickers.json" forever, with no hint
+        that the fix is --refresh.
+        """
         path = self._cache_path(url)
-        if path.exists() and not self.refresh:
+        fresh = path.exists() and not self.refresh
+        if fresh and max_age is not None:
+            fresh = (time.time() - path.stat().st_mtime) < max_age
+        if fresh:
             self.cache_hits += 1
-            return path.read_bytes() if binary else path.read_text(encoding="utf-8")
+            # Match the decode below: a first fetch that hit a non-UTF-8 byte
+            # (older filings, cp1252 punctuation) wrote fine with errors="ignore".
+            # strict decode here would pass on that run and crash the next one —
+            # the exact "re-run is a no-op" path this cache exists for.
+            return path.read_bytes() if binary else path.read_bytes().decode("utf-8", "ignore")
 
         # SEC throws occasional 503s under load — a single one silently cost us
         # Tesla's balance sheet during testing. Retry with backoff.
@@ -102,20 +118,31 @@ class SECClient:
         path.write_bytes(resp.content)
         return resp.content if binary else resp.content.decode("utf-8", "ignore")
 
-    def get_json(self, url):
-        return json.loads(self.get(url))
+    def get_json(self, url, max_age=None):
+        return json.loads(self.get(url, max_age=max_age))
 
     # --- lookups ---------------------------------------------------------
 
-    @staticmethod
-    def normalize_ticker(ticker):
+    # Real tickers are short and alnum-with-dot/dash. Enforced here, not just
+    # in resolve_cik, because --cik skips resolve_cik entirely — without this,
+    # a ticker string built into a filesystem path ("../../etc") would ride
+    # straight through to the output directory.
+    TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
+
+    @classmethod
+    def normalize_ticker(cls, ticker):
         """SEC writes share classes with a dash: BRK.B -> BRK-B."""
-        return ticker.strip().upper().replace(".", "-")
+        ticker = ticker.strip().upper()
+        if not cls.TICKER_RE.match(ticker):
+            raise SECError(
+                "{!r} doesn't look like a ticker (letters/digits/dot/dash, max 10 chars).".format(ticker)
+            )
+        return ticker.replace(".", "-")
 
     def resolve_cik(self, ticker):
         """Ticker -> CIK int. ~10,400 tickers in one cached file."""
         ticker = self.normalize_ticker(ticker)
-        data = self.get_json(TICKER_MAP_URL)
+        data = self.get_json(TICKER_MAP_URL, max_age=TICKER_MAP_MAX_AGE)
         for entry in data.values():
             if entry["ticker"] == ticker:
                 return int(entry["cik_str"])

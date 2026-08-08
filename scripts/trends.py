@@ -17,9 +17,13 @@ Two things learned the hard way:
 
 Restatements mean the same period appears more than once; the row with the
 latest `filed` date wins.
+
+The same call also carries every 10-Q the company has filed, which is what
+`ttm()` at the bottom uses to roll the newest fiscal year forward to the most
+recent quarter. Free — the facts are already in hand.
 """
 
-from datetime import date
+from datetime import date, timedelta
 
 # Concept name varies by filer, so each line item is a priority list: first one
 # present wins. A missing line item is reported as missing, never substituted.
@@ -234,11 +238,15 @@ def _ratio(num, den, pct=True):
     return round(num / den * (100 if pct else 1), 1 if pct else 2)
 
 
-def build(companyfacts, max_years=10, as_of=None):
-    """companyfacts JSON -> {years, series, derived, missing}.
+def build(companyfacts, max_years=10, as_of=None, with_ttm=True):
+    """companyfacts JSON -> {years, series, derived, ttm, missing}.
 
     `as_of` caps the history at a fiscal year end, so pulling an old 10-K gives
     the history as it stood then rather than years the filing predates.
+
+    `ttm` rolls the newest of those years forward with whatever 10-Qs have been
+    filed since — see the trailing-twelve-months block below. It is None when no
+    10-Q post-dates the 10-K, and it never replaces an annual figure.
     """
     facts = companyfacts.get("facts", {}).get("us-gaap", {})
     series, missing = {}, []
@@ -281,6 +289,7 @@ def build(companyfacts, max_years=10, as_of=None):
         "fiscal_year_ends": years,
         "series": series,
         "derived": derive(series, years),
+        "ttm": ttm(facts, series, years[-1]) if with_ttm and years else None,
         "missing": missing,
     }
 
@@ -364,11 +373,7 @@ def derive(series, years):
         if gross is None and rev is not None and val("cost_of_revenue", year) is not None:
             gross = rev - val("cost_of_revenue", year)
         debt, debt_basis = _total_debt(val, year)
-        liquid = sum(
-            v
-            for v in (val("cash", year), val("short_term_investments", year))
-            if v is not None
-        ) or None
+        liquid = _add(val("cash", year), val("short_term_investments", year))
         # Operating income is the clean EBIT. Banks and insurers don't tag it at
         # all (JPMorgan, Berkshire), so fall back to the definition: profit
         # before tax and interest.
@@ -402,10 +407,15 @@ def derive(series, years):
             "debt_basis": debt_basis,
             # Par value is usually zero even when there is real preferred stock
             # outstanding; the liquidation preference is what an EV bridge wants.
-            "preferred": max(
-                [v for v in (val("preferred_stock", year), val("preferred_liquidation", year))
-                 if v is not None] or [0]
-            ) or None,
+            # max(), not _add(): these are two readings of the same balance, not
+            # two components to sum. A 0 either tags (no preferred) is real, not
+            # missing — only "neither tagged" should read as missing.
+            "preferred": (
+                max(v for v in (val("preferred_stock", year), val("preferred_liquidation", year))
+                    if v is not None)
+                if val("preferred_stock", year) is not None or val("preferred_liquidation", year) is not None
+                else None
+            ),
             "minority_interest": val("minority_interest", year),
             "net_cash": (liquid - debt) if liquid is not None and debt is not None else None,
             "debt_to_equity": _ratio(debt, val("total_equity", year), pct=False),
@@ -428,6 +438,220 @@ def derive(series, years):
         "eps_5y_pct": _cagr(series["eps_diluted"]["values"], 5),
     }
     return out
+
+
+# --- trailing twelve months ----------------------------------------------
+#
+# The 10-K is audited, complete and up to a year stale. The 10-Qs filed since
+# are the only tagged data that closes that gap, and rolling the year forward
+# with them is one subtraction:
+#
+#     TTM = fiscal year + year-to-date this year - year-to-date a year ago
+#
+# Year-to-date, never discrete quarters. Two reasons, both fatal to the other
+# approach: a 10-Q's cash flow statement is *always* cumulative from the year
+# start, so there is no discrete-quarter operating cash flow to add up; and the
+# fourth quarter never appears in a 10-Q at all, so a four-quarter sum is always
+# missing a leg. One shape works for every line on every statement.
+#
+# All of it comes out of the companyfacts call the run already makes, so the
+# whole feature costs zero extra SEC requests.
+
+# Flow items only. A weighted-average share count is deliberately absent:
+# differencing two weighted averages produces a number that means nothing.
+# EPS *is* here — summing per-share amounts across periods is the standard TTM
+# convention, and it drifts from net-income/shares only by buybacks inside the
+# year. `ttm()` records both so the drift is checkable.
+TTM_METRICS = [
+    "revenue", "cost_of_revenue", "gross_profit", "rnd_expense", "operating_income",
+    "net_income", "eps_diluted", "operating_cash_flow", "capex", "d_and_a",
+    "pretax_income", "interest_expense", "buybacks", "dividends_paid",
+]
+
+# The anchor exists only to establish *which two periods* are being
+# differenced, so any line the filer tags cumulatively every quarter will do.
+# Revenue first. Banks are why there is a fallback: JPMorgan tags `Revenues` in
+# its 10-K and nothing from the revenue list in its 10-Qs, so anchoring on
+# revenue alone throws away a net-income roll-forward it can perfectly well
+# support. Lines the anchor can't carry come back in `not_tagged`.
+TTM_ANCHORS = [DURATION_CONCEPTS["revenue"], DURATION_CONCEPTS["net_income"]]
+
+TTM_TOLERANCE_DAYS = 10   # a 53-week fiscal year stretches a period by 7
+TTM_YEAR_DAYS = 364       # 52 weeks — retail calendars land here, not on 365
+TTM_END_TOLERANCE = 20    # how far the prior year's quarter end may drift
+# A quarter this far past the year end belongs to a later fiscal year, not this
+# one. Q3 lands ~250 days out; the following year's Q1 lands ~450.
+TTM_MAX_GAP_DAYS = 400
+
+
+def _duration_days(row):
+    return (date.fromisoformat(row["end"]) - date.fromisoformat(row["start"])).days
+
+
+def _quarterly_rows(facts, concepts, after=None):
+    """Every 10-Q duration row, from the first concept still tagged after `after`.
+
+    First-concept-wins rather than merging: the two periods being differenced
+    have to come from one concept, or an accounting-standard change inside the
+    window silently subtracts two different definitions of revenue.
+
+    `after` is what makes that safe. Filers abandon concepts without deleting
+    the history: Uber tagged RevenueFromContractWithCustomerExcludingAssessedTax
+    in its 10-Qs only through 2019 and reports `Revenues` now, so "first concept
+    with any rows at all" locks onto a series seven years dead and the
+    roll-forward finds no quarter to anchor on. Every row of the chosen concept
+    comes back, including ones before the cutoff — the prior-year comparative is
+    always one of those.
+    """
+    for concept in concepts:
+        rows = [r for r in _units(facts.get(concept, {}))
+                if r.get("form") == "10-Q" and "start" in r and "val" in r]
+        if rows and (after is None or any(r["end"] > after for r in rows)):
+            return concept, rows
+    return None, []
+
+
+def _pick_ytd(rows, end, days=None):
+    """The year-to-date row ending on `end`, or None.
+
+    Q3 tags both a 13-week and a 39-week period finishing the same day, and only
+    the cumulative one can be differenced against a full year — so the longest
+    duration wins. Passing `days` pins the length instead, which is how the
+    prior year's comparable period is matched. Restatements tie-break on filing
+    date, latest winning.
+    """
+    best = None
+    for row in rows:
+        if row["end"] != end:
+            continue
+        d = _duration_days(row)
+        if days is not None and abs(d - days) > TTM_TOLERANCE_DAYS:
+            continue
+        if best is None or (d, row["filed"]) > (_duration_days(best), best["filed"]):
+            best = row
+    return best
+
+
+def _prior_year_end(rows, q_end, days):
+    """The period end ~52 weeks before `q_end` covering the same span.
+
+    Matched on the data rather than computed, because fiscal calendars drift:
+    Costco's Q3 ends 2026-05-10 and 2025-05-11, 364 days apart, and neither is
+    the same calendar date.
+    """
+    target = date.fromisoformat(q_end) - timedelta(days=TTM_YEAR_DAYS)
+    best = None
+    for row in rows:
+        if abs(_duration_days(row) - days) > TTM_TOLERANCE_DAYS:
+            continue
+        gap = abs((date.fromisoformat(row["end"]) - target).days)
+        if gap <= TTM_END_TOLERANCE and (best is None or gap < best[0]):
+            best = (gap, row["end"])
+    return best[1] if best else None
+
+
+def _anchor_rows(facts, fy_end):
+    """(concept, rows) for the first anchor line this filer still tags."""
+    for concepts in TTM_ANCHORS:
+        concept, rows = _quarterly_rows(facts, concepts, after=fy_end)
+        if rows:
+            return concept, rows
+    return None, []
+
+
+def latest_quarter(facts, fy_end):
+    """The newest 10-Q period that belongs to the year *after* `fy_end`.
+
+    Read off the facts rather than the submissions index, so the period named is
+    the one that actually supplied the numbers — and so pulling an old 10-K with
+    --year rolls it forward with that year's quarters, not today's.
+    """
+    _, rows = _anchor_rows(facts, fy_end)
+    if not rows:
+        return None
+    cutoff = date.fromisoformat(fy_end) + timedelta(days=TTM_MAX_GAP_DAYS)
+    ends = [r["end"] for r in rows
+            if fy_end < r["end"] <= cutoff.isoformat()]
+    return _pick_ytd(rows, max(ends)) if ends else None
+
+
+def ttm(facts, series, fy_end):
+    """Roll the fiscal year forward with 10-Q data. None when that can't be done.
+
+    Returns None — rather than a guess — when no 10-Q post-dates the 10-K (the
+    annual report is the company's newest filing), or when the prior year's
+    comparable period isn't tagged. A blank TTM is the honest answer; nothing
+    here is extrapolated.
+    """
+    anchor = latest_quarter(facts, fy_end)
+    if anchor is None:
+        return None
+    q_end, days = anchor["end"], _duration_days(anchor)
+    anchor_concept, anchor_rows = _anchor_rows(facts, fy_end)
+    prior_end = _prior_year_end(anchor_rows, q_end, days)
+    if prior_end is None:
+        return None
+
+    values, ytd, prior_ytd, growth, concepts, annual, missing = {}, {}, {}, {}, {}, {}, []
+    for name in TTM_METRICS:
+        concept, rows = _quarterly_rows(facts, DURATION_CONCEPTS[name], after=fy_end)
+        cur = _pick_ytd(rows, q_end, days) if rows else None
+        pri = _pick_ytd(rows, prior_end, days) if rows else None
+        fy = series.get(name, {}).get("values", {}).get(fy_end)
+        ytd[name] = cur["val"] if cur else None
+        prior_ytd[name] = pri["val"] if pri else None
+        growth[name] = _pct(ytd[name], prior_ytd[name])
+        concepts[name] = concept
+        annual[name] = fy
+        if cur is not None and pri is not None and fy is not None:
+            values[name] = fy + cur["val"] - pri["val"]
+        else:
+            values[name] = None
+            missing.append(name)
+
+    # The balance sheet is restated at the quarter end too, so the EV bridge
+    # moves with the earnings instead of staying a year behind them.
+    balance, balance_concepts = {}, {}
+    for name, cs in INSTANT_CONCEPTS.items():
+        used, vals = _merge(facts, cs, lambda r: "start" not in r and r["end"] == q_end)
+        balance[name] = vals.get(q_end)
+        balance_concepts[name] = used[0] if used else None
+
+    # Feed the same derive() the annual rows go through — one definition of
+    # EBIT, EBITDA, free cash flow and total debt across both, including the
+    # debt-shape logic that decides what does and doesn't double-count.
+    synthetic = {name: {"values": {}} for name in
+                 list(DURATION_CONCEPTS) + list(INSTANT_CONCEPTS) + list(QUARTERLY_CONCEPTS)}
+    for name, v in list(values.items()) + list(balance.items()):
+        synthetic[name]["values"][q_end] = v
+    derived = derive(synthetic, [q_end])[q_end]
+
+    weeks = round(days / 7)
+    return {
+        "quarter_end": q_end,
+        "anchor_concept": anchor_concept,
+        "quarter_filed": anchor.get("filed"),
+        "fiscal_period": anchor.get("fp"),
+        "accession": anchor.get("accn"),
+        "prior_quarter_end": prior_end,
+        "fiscal_year_end": fy_end,
+        "weeks_year_to_date": weeks,
+        "days_stale_at_fy_end": (date.fromisoformat(q_end) - date.fromisoformat(fy_end)).days,
+        "basis": (
+            "fiscal year ended {} + {} weeks ended {} − {} weeks ended {}".format(
+                fy_end, weeks, q_end, weeks, prior_end)
+        ),
+        "values": values,
+        "fiscal_year": annual,
+        "year_to_date": ytd,
+        "prior_year_to_date": prior_ytd,
+        "ytd_growth_pct": growth,
+        "concepts": concepts,
+        "balance": balance,
+        "balance_concepts": balance_concepts,
+        "derived": derived,
+        "not_tagged": missing,
+    }
 
 
 # --- rendering -----------------------------------------------------------
@@ -677,7 +901,103 @@ def demo():
     assert d2["ebitda"] == 105e6, d2["ebitda"]
     # Par value of zero must not beat a real liquidation preference.
     assert d2["preferred"] == 3e6, d2["preferred"]
-    print("ok: trends — duration/instant split, restatement pick, debt shapes, EBIT/EBITDA")
+
+    # --- trailing twelve months ------------------------------------------
+    # No 10-Q anywhere: the roll-forward must return None, not a guess.
+    assert build(facts)["ttm"] is None, "TTM invented from 10-K rows alone"
+
+    # A filer with a 52-week calendar, three quarters filed since the year end.
+    # Q3 tags a discrete 13-week period and a cumulative 39-week one ending the
+    # same day; only the cumulative one may be differenced against the year.
+    tf = {"facts": {"us-gaap": {}}}
+    tg = tf["facts"]["us-gaap"]
+    tg.update(dur("Revenues", {"2023-12-30": 800e6, "2024-12-28": 1000e6}))
+    tg.update(dur("NetIncomeLoss", {"2023-12-30": 80e6, "2024-12-28": 100e6}))
+    tg.update(dur("NetCashProvidedByUsedInOperatingActivities",
+                  {"2023-12-30": 90e6, "2024-12-28": 120e6}))
+    q10 = lambda s, e, v: {"start": s, "end": e, "val": v, "form": "10-Q",
+                           "filed": e, "accn": "acc-" + e, "fp": "Q3"}
+    tg["Revenues"]["units"]["USD"] += [
+        q10("2024-12-29", "2025-09-27", 850e6),   # 272d cumulative, this year
+        q10("2025-06-29", "2025-09-27", 300e6),   # 90d discrete, same end date
+        q10("2023-12-31", "2024-09-28", 780e6),   # 272d cumulative, a year back
+        q10("2024-06-30", "2024-09-28", 280e6),   # 90d discrete, a year back
+    ]
+    tg["NetIncomeLoss"]["units"]["USD"] += [
+        q10("2024-12-29", "2025-09-27", 88e6), q10("2023-12-31", "2024-09-28", 76e6)]
+    tg["NetCashProvidedByUsedInOperatingActivities"]["units"]["USD"] += [
+        q10("2024-12-29", "2025-09-27", 100e6), q10("2023-12-31", "2024-09-28", 85e6)]
+    tg.update(dur("PaymentsToAcquirePropertyPlantAndEquipment",
+                  {"2023-12-30": 30e6, "2024-12-28": 40e6}))
+    tg["PaymentsToAcquirePropertyPlantAndEquipment"]["units"]["USD"] += [
+        q10("2024-12-29", "2025-09-27", 36e6), q10("2023-12-31", "2024-09-28", 28e6)]
+    # Balance sheet at the quarter end, so the EV bridge moves with the earnings.
+    tg["CashAndCashEquivalentsAtCarryingValue"] = {"units": {"USD": [
+        {"end": "2024-12-28", "val": 50e6, "form": "10-K", "filed": "2025-02-01"},
+        {"end": "2025-09-27", "val": 70e6, "form": "10-Q", "filed": "2025-10-01"}]}}
+    tg["LongTermDebtNoncurrent"] = {"units": {"USD": [
+        {"end": "2025-09-27", "val": 30e6, "form": "10-Q", "filed": "2025-10-01"}]}}
+
+    t = build(tf)["ttm"]
+    assert t["quarter_end"] == "2025-09-27", t["quarter_end"]
+    # The 272-day row, not the 90-day one that ends on the same day.
+    assert t["weeks_year_to_date"] == 39, t["weeks_year_to_date"]
+    assert t["prior_quarter_end"] == "2024-09-28", t["prior_quarter_end"]
+    # 1000 + 850 - 780. Discrete quarters would have produced 300 + something.
+    assert t["values"]["revenue"] == 1070e6, t["values"]["revenue"]
+    assert t["values"]["net_income"] == 112e6, t["values"]["net_income"]
+    assert t["values"]["operating_cash_flow"] == 135e6, t["values"]["operating_cash_flow"]
+    assert t["ytd_growth_pct"]["revenue"] == 9.0, t["ytd_growth_pct"]["revenue"]
+    assert t["fiscal_year"]["revenue"] == 1000e6, "annual value not carried for comparison"
+    assert t["accession"] == "acc-2025-09-27", t["accession"]
+    # Balance sheet and derived figures come off the quarter, not the year end.
+    assert t["balance"]["cash"] == 70e6, t["balance"]["cash"]
+    assert t["derived"]["total_debt"] == 30e6, t["derived"]["total_debt"]
+    # FCF is built from the TTM legs, not lifted from the year: (120+100-85)
+    # minus (40+36-28) = 135 - 48.
+    assert t["values"]["capex"] == 48e6, t["values"]["capex"]
+    assert t["derived"]["free_cash_flow"] == 87e6, t["derived"]["free_cash_flow"]
+    # A line the 10-Qs never tag is reported, never back-filled from the year.
+    assert "d_and_a" in t["not_tagged"], t["not_tagged"]
+    assert t["values"]["d_and_a"] is None
+
+    # An old 10-K anchors on its *own* following quarter. Anchoring on the
+    # newest quarter in the file would value a 2023 year with 2025 quarters.
+    tgf = tf["facts"]["us-gaap"]
+    assert latest_quarter(tgf, "2023-12-30")["end"] == "2024-09-28"
+    assert latest_quarter(tgf, "2024-12-28")["end"] == "2025-09-27"
+    # A year with no quarters after it at all has nothing to roll forward with.
+    assert latest_quarter(tgf, "2025-09-27") is None
+    # And with no prior-year comparable in the data to difference against, the
+    # roll-forward refuses rather than returning a half-built year.
+    assert build(tf, as_of="2023-12-30")["ttm"] is None
+
+    # with_ttm=False is the --no-ttm path: annual figures untouched, no TTM key.
+    off = build(tf, with_ttm=False)
+    assert off["ttm"] is None and off["series"]["revenue"]["values"]["2024-12-28"] == 1000e6
+
+    # A concept the filer abandoned must not win the anchor. Uber's shape: the
+    # preferred revenue concept has 10-Q rows, but none since 2019.
+    stale = {"facts": {"us-gaap": dict(tgf)}}
+    sg = stale["facts"]["us-gaap"]
+    sg["RevenueFromContractWithCustomerExcludingAssessedTax"] = {"units": {"USD": [
+        q10("2019-01-01", "2019-03-31", 5e6)]}}
+    st = build(stale)["ttm"]
+    assert st and st["quarter_end"] == "2025-09-27", "anchored on a dead concept"
+    assert st["values"]["revenue"] == 1070e6, st["values"]["revenue"]
+
+    # A bank tags no revenue in its 10-Qs at all. Net income still rolls
+    # forward; revenue comes back in not_tagged rather than wrong. (JPMorgan.)
+    bank = {"facts": {"us-gaap": {k: v for k, v in tgf.items() if k != "Revenues"}}}
+    bank["facts"]["us-gaap"]["Revenues"] = {"units": {"USD": [
+        r for r in tgf["Revenues"]["units"]["USD"] if r.get("form") == "10-K"]}}
+    bt = build(bank)["ttm"]
+    assert bt["anchor_concept"] == "NetIncomeLoss", bt["anchor_concept"]
+    assert bt["quarter_end"] == "2025-09-27" and bt["values"]["net_income"] == 112e6
+    assert bt["values"]["revenue"] is None and "revenue" in bt["not_tagged"]
+
+    print("ok: trends — duration/instant split, restatement pick, debt shapes, "
+          "EBIT/EBITDA, TTM roll-forward")
 
 
 if __name__ == "__main__":

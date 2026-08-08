@@ -112,6 +112,62 @@ def load_filing(out_dir):
             "warning": v.get("market_cap_warning"),
             **{k: v["multiples"].get(k) for k in ("ev_sales", "ev_ebit", "ev_ebitda", "pe")},
         }
+        # Flattened for the TTM block below, which merges it with trends.json.
+        # Underscored because it is plumbing between two blocks here, not a
+        # field the page reads off `valuation`.
+        tt = v.get("ttm")
+        if tt:
+            valuation["_ttm"] = {
+                "market_cap_m": money(tt.get("market_cap")),
+                "ev_m": money(tt["bridge"].get("enterprise_value")),
+                "shares": tt.get("shares"),
+                "shares_basis": tt.get("shares_basis"),
+                **{k: tt["multiples"].get(k) for k in (
+                    "ev_sales", "ev_ebit", "ev_ebitda", "pe", "fcf_yield_pct")},
+            }
+
+    # Trailing twelve months — the 10-K year rolled forward with the 10-Qs filed
+    # since. Additive: it sits beside the annual block on the page, never over
+    # it, so the 10-K-only material (risk diff, share-comp footnote, audited
+    # statements) is untouched. None when no 10-Q post-dates the filing.
+    t = trends.get("ttm")
+    ttm = None
+    if t:
+        tv = (valuation or {}).pop("_ttm", None) or {}
+        vals, fy_vals, growth = t["values"], t["fiscal_year"], t["ytd_growth_pct"]
+        ttm = {
+            "quarter_end": t["quarter_end"],
+            "quarter_filed": t["quarter_filed"],
+            "fiscal_period": t["fiscal_period"],
+            "basis": t["basis"],
+            "days_past_year_end": t["days_stale_at_fy_end"],
+            "weeks_ytd": t["weeks_year_to_date"],
+            "prior_quarter_end": t["prior_quarter_end"],
+            "not_tagged": t.get("not_tagged") or [],
+            # Each line as (fiscal year, TTM, year-to-date growth) so the page
+            # can show the gap rather than just the newer number.
+            "rows": [
+                {"label": label, "fy": fy_vals.get(k), "ttm": vals.get(k),
+                 "growth_pct": growth.get(k), "money": money_row}
+                for label, k, money_row in (
+                    ("Revenue", "revenue", True),
+                    ("Operating income", "operating_income", True),
+                    ("Net income", "net_income", True),
+                    ("EPS diluted", "eps_diluted", False),
+                    ("Cash from ops", "operating_cash_flow", True),
+                    ("Capex", "capex", True),
+                    ("D&A", "d_and_a", True),
+                )
+            ],
+            "fcf_m": money(t["derived"].get("free_cash_flow")),
+            "ebit_m": money(t["derived"].get("ebit")),
+            "ebitda_m": money(t["derived"].get("ebitda")),
+            "cash_m": money(t["balance"].get("cash")),
+            "total_debt_m": money(t["derived"].get("total_debt")),
+            **{k: tv.get(k) for k in (
+                "market_cap_m", "ev_m", "shares", "shares_basis",
+                "ev_sales", "ev_ebit", "ev_ebitda", "pe", "fcf_yield_pct")},
+        }
 
     rel = out_dir.relative_to(ROOT).as_posix()
     files = []
@@ -164,6 +220,7 @@ def load_filing(out_dir):
             "mrq_revenue_prior_m": money(d.get("mrq_revenue_prior")),
         },
         "valuation": valuation,
+        "ttm": ttm,
         "cagr": derived.get("cagr", {}),
         "history": history,
         "risk": risk,
@@ -206,7 +263,42 @@ def run_extractor(ticker):
     return Path(out_dir), log
 
 
+# Stdlib's default error page is unstyled black-on-white, which in an all-
+# #222222 site reads as the browser breaking rather than the path being wrong.
+# error_message_format is the handler's own hook, so this costs no new route.
+# Every literal % is doubled — this string goes through %-formatting, and a
+# bare "100%" in the CSS would raise instead of render.
+ERROR_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>%(code)d — 10K AI</title>
+<meta name="theme-color" content="#222222">
+<link rel="icon" href="/assets/favicon-icarus.png" type="image/png">
+<style>
+@font-face{font-family:"Libre Caslon Display";src:url("/assets/fonts/libre-caslon-display.woff2") format("woff2");font-display:swap}
+body{margin:0;min-height:100dvh;display:grid;align-content:center;
+  padding:2rem clamp(1.15rem,4.5vw,3.25rem);background:#222;color:#B79C8D;
+  font:15px/1.7 -apple-system,Helvetica,Arial,sans-serif}
+h1{margin:0 0 .6rem;font-family:"Libre Caslon Display",Baskerville,serif;
+  font-weight:400;font-size:clamp(2rem,5vw,3.4rem);letter-spacing:-.015em;color:#EFD5C8}
+p{margin:0;max-width:52ch;font-size:.8125rem}
+a{color:#EFD5C8;text-decoration:none;border-bottom:1px solid rgba(239,213,200,.15)}
+a:hover{border-bottom-color:#EFD5C8}
+.n{font-family:ui-monospace,Menlo,monospace;font-size:.75rem;letter-spacing:.16em;
+  text-transform:uppercase;color:#A98D7D;margin:0 0 1rem}
+</style></head><body>
+<p class="n">%(code)d %(message)s</p>
+<h1>Nothing at that path</h1>
+<p>%(explain)s. Every other error on this server answers as JSON, so if you are
+seeing this page you asked for a file that isn't here.
+<a href="/">Back to the ticker box</a>.</p>
+</body></html>
+"""
+
+
 class Handler(SimpleHTTPRequestHandler):
+    error_message_format = ERROR_PAGE
+
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=str(SITE), **kw)
 
@@ -273,7 +365,11 @@ class Handler(SimpleHTTPRequestHandler):
 
         try:
             n = int(self.headers.get("Content-Length") or 0)
+            if n > 1_000_000:
+                return self.send_json({"error": "request too large"}, 413)
             payload = json.loads(self.rfile.read(n) or b"{}")
+            if not isinstance(payload, dict):
+                raise ValueError("body must be a JSON object")
         except (ValueError, json.JSONDecodeError):
             return self.send_json({"error": "bad request"}, 400)
 

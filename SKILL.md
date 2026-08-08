@@ -39,6 +39,7 @@ feed anywhere in this tool.
 | Exact statement line items, as filed | `statements/income_statement.md`, `balance_sheet.md`, `cash_flow.md` |
 | Multi-year trend, margins, FCF, ROE | `trends.md` |
 | Share count, market cap, EV, EBIT/EBITDA, multiples | `valuation.md` |
+| Current run-rate, not the audited year | the **Trailing twelve months** section of `SUMMARY.md` and `valuation.md` (`ttm` in the JSON twins) |
 | Lawsuits | `sections/item3_legal_proceedings.md` |
 | Accounting notes, segment detail | `sections/item8_financial_statements.md` |
 | Rates/FX/commodity exposure | `sections/item7a_market_risk.md` |
@@ -84,5 +85,14 @@ Follow the house rules in `~/Claude/Claude Code/CLAUDE.md`:
 - **EV comes with its own caveats.** The file states how total debt was assembled
   and refuses to print an EV at all when debt or cash isn't tagged. Don't fill
   that gap with an estimate.
+- **The annual column is the audited one; the TTM column is the current one.**
+  TTM = fiscal year + this year's year-to-date − last year's year-to-date at the
+  same quarter, from the 10-Qs, with the balance sheet moved to the quarter end.
+  Use TTM when the question is about the run-rate now and say which quarter it
+  runs to; use the fiscal year when the question is about what was audited, filed
+  or discussed in the MD&A. Never mix them inside one multiple. Lines a filer
+  doesn't tag quarterly are listed in `not_tagged` and are blank in the TTM
+  column only — banks typically have no quarterly revenue there. When the section
+  says there is no TTM, the 10-K is the newest data and that is the answer.
 - Watch for split-driven breaks in the EPS and share-count rows of `trends.md`;
   the file explains why they're there.

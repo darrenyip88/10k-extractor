@@ -30,9 +30,9 @@ body{
 h1{
   font-family:var(--serif);font-weight:400;
   font-size:clamp(1.9rem,4.4vw,3rem);letter-spacing:-.015em;
-  color:var(--cream);margin:0 0 .6rem;
+  color:var(--cream);margin:0 0 .6rem;text-wrap:balance;
 }
-.sub{margin:0 0 clamp(2.4rem,6vh,4rem);font-size:.875rem;max-width:58ch;line-height:1.65}
+.sub{margin:0 0 clamp(2.4rem,6vh,4rem);font-size:.875rem;max-width:58ch;line-height:1.65;text-wrap:pretty}
 .sub b{color:var(--cream);font-weight:400}
 
 /* the page's own rule: a hairline that breaks into the pixel matrix */
@@ -55,10 +55,13 @@ h1{
   background:url("assets/planet.webp") center/contain no-repeat;
   animation:drift 34s ease-in-out infinite alternate;will-change:transform;
 }
+/* All four in the right margin. This page is flush left with a 62rem column,
+   so unlike the live page there is no left margin to hide in — a planet at 4%
+   lands on a heading and reads as dirt on the screen rather than a body. */
 .planet:nth-of-type(1){width:38px;left:88%;top:9%;opacity:.42}
-.planet:nth-of-type(2){width:14px;left:4%;top:31%;opacity:.5;animation-duration:26s}
+.planet:nth-of-type(2){width:14px;left:75%;top:31%;opacity:.5;animation-duration:26s}
 .planet:nth-of-type(3){width:46px;left:83%;top:58%;opacity:.24;animation-duration:44s}
-.planet:nth-of-type(4){width:20px;left:6%;top:79%;opacity:.38;animation-duration:31s}
+.planet:nth-of-type(4){width:20px;left:92%;top:79%;opacity:.38;animation-duration:31s}
 @keyframes drift{from{transform:translate3d(0,0,0)}to{transform:translate3d(2.4rem,-1.4rem,0)}}
 .plate{
   position:absolute;right:-11%;top:34%;
@@ -79,11 +82,12 @@ a{
 h2{
   margin:0;font-family:var(--serif);font-weight:400;
   font-size:clamp(1.25rem,2.4vw,1.75rem);letter-spacing:-.012em;
-  color:var(--cream);transition:opacity .18s;
+  color:var(--cream);transition:opacity .18s;text-wrap:balance;
 }
 a:hover h2{opacity:.72}
+a:active h2{transform:translateY(1px)}
 .meta{font-family:var(--mono);font-size:.6875rem;letter-spacing:.04em;color:var(--faint)}
-p{margin:0;font-size:.9375rem;line-height:1.65;color:var(--dim);max-width:64ch}
+p{margin:0;font-size:.9375rem;line-height:1.65;color:var(--dim);max-width:64ch;text-wrap:pretty}
 .live{
   font-family:var(--sans);font-weight:600;font-size:.5625rem;
   letter-spacing:.2em;text-transform:uppercase;color:var(--cream);
@@ -105,6 +109,7 @@ p{margin:0;font-size:.9375rem;line-height:1.65;color:var(--dim);max-width:64ch}
   <i class="plate"></i>
 </div>
 
+<main>
 <h1>10K AI — four directions</h1>
 <p class="sub"><b>Icarus</b> is the one being built out — it has the working ticker box and the extractor behind it. The other three are the design only, kept for reference.</p>
 <div class="rule" role="presentation"></div>
@@ -130,5 +135,6 @@ p{margin:0;font-size:.9375rem;line-height:1.65;color:var(--dim);max-width:64ch}
     <p>A broadsheet on a 12-column grid. Everything flush left, headline anchored to column one, tracked uppercase labels in the margin, the output set as a scannable file index.</p>
   </a></li>
 </ol>
+</main>
 </body>
 </html>
