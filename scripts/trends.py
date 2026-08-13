@@ -290,6 +290,15 @@ def build(companyfacts, max_years=10, as_of=None, with_ttm=True):
         "series": series,
         "derived": derive(series, years),
         "ttm": ttm(facts, series, years[-1]) if with_ttm and years else None,
+        # Both read the 10-Qs, and both are independent of the TTM roll: a
+        # missing prior-year comparable kills the roll-forward but says nothing
+        # about the latest quarter's revenue or its balance sheet.
+        "mrq": mrq(facts, series, years) if with_ttm and years else None,
+        "snapshot": snapshot(companyfacts, years[-1]) if with_ttm and years else None,
+        # All three of the above read the 10-Qs, so --no-ttm drops all three.
+        # Recorded, because "you told me not to look" and "the filer doesn't tag
+        # it" produce the same blank and are not the same statement.
+        "quarters_skipped": not with_ttm,
         "missing": missing,
     }
 
@@ -654,6 +663,288 @@ def ttm(facts, series, fy_end):
     }
 
 
+# --- the most recent quarter ---------------------------------------------
+#
+# A single quarter, not a rolling year. The 10-K tags one only if the filer
+# still publishes selected quarterly data (most don't since 2021), so the real
+# source is the latest 10-Q — and when the 10-K *is* the newest filing, the
+# fourth quarter is the year less the last year-to-date 10-Q of that year.
+
+
+def _annual_value(facts, concept, end):
+    """One concept's own annual value for the year ending `end`, latest filing
+    winning. None when that concept has no annual row there."""
+    if not concept:
+        return None
+    rows = [r for r in _units(facts.get(concept, {}))
+            if r.get("form", "").startswith("10-K") and "start" in r and r["end"] == end
+            and MIN_DAYS <= _duration_days(r) <= MAX_DAYS]
+    return max(rows, key=lambda r: r["filed"])["val"] if rows else None
+
+
+def _quarter_row(rows, end):
+    """The discrete quarter-length row ending on `end`. Latest filing wins.
+
+    Q2 and Q3 tag a cumulative period ending the same day; those run past
+    QUARTER_MAX_DAYS and drop out here. Q1's only row is both at once.
+    """
+    best = None
+    for row in rows:
+        if row["end"] != end or not (
+            QUARTER_MIN_DAYS <= _duration_days(row) <= QUARTER_MAX_DAYS
+        ):
+            continue
+        if best is None or row["filed"] > best["filed"]:
+            best = row
+    return best
+
+
+def _quarter_value(rows, end):
+    """-> (the quarter ending `end`, how it was arrived at).
+
+    Falls back to differencing two cumulative periods for filers that tag only
+    year-to-date figures. Both legs start on the same day — the fiscal year
+    start — which is what identifies the pair without knowing the calendar.
+    """
+    q = _quarter_row(rows, end)
+    if q is not None:
+        return q["val"], "tagged as a discrete quarter"
+    cur = _pick_ytd(rows, end)
+    if cur is None:
+        return None, None
+    same_year = [
+        r for r in rows
+        if r["end"] < end
+        and abs((date.fromisoformat(r["start"]) - date.fromisoformat(cur["start"])).days)
+        <= TTM_TOLERANCE_DAYS
+    ]
+    if not same_year:
+        return None, None
+    prev = max(same_year, key=lambda r: (r["end"], _duration_days(r), r["filed"]))
+    return cur["val"] - prev["val"], (
+        "year-to-date to {} less year-to-date to {} — this filer tags no discrete "
+        "quarter".format(end, prev["end"])
+    )
+
+
+def mrq(facts, series, years):
+    """Revenue for the most recent quarter, and the same quarter a year earlier.
+
+    The latest 10-Q when one post-dates the 10-K; the fourth quarter out of the
+    10-K itself when it doesn't. Never a full year mislabelled as a quarter, and
+    never a quarter differenced across two revenue concepts.
+    """
+    if not years:
+        return None
+    fy_end = years[-1]
+    prior_fy = years[-2] if len(years) > 1 else None
+
+    concept, rows = _quarterly_rows(facts, DURATION_CONCEPTS["revenue"], after=fy_end)
+    cutoff = (date.fromisoformat(fy_end) + timedelta(days=TTM_MAX_GAP_DAYS)).isoformat()
+    ends = [r["end"] for r in rows if fy_end < r["end"] <= cutoff]
+    if ends:
+        q_end = max(ends)
+        ytd = _pick_ytd(rows, q_end)
+        prior_end = _prior_year_end(rows, q_end, _duration_days(ytd)) if ytd else None
+        value, basis = _quarter_value(rows, q_end)
+        prior, _ = _quarter_value(rows, prior_end) if prior_end else (None, None)
+        return {
+            "quarter_end": q_end,
+            "revenue": value,
+            "prior_quarter_end": prior_end,
+            "prior_revenue": prior,
+            "growth_pct": _pct(value, prior),
+            "concept": concept,
+            "source": "latest 10-Q",
+            "basis": basis,
+        }
+
+    # No 10-Q since the year end: the most recent quarter is the fourth.
+    tagged = series.get("mrq_revenue", {}).get("values", {}).get(fy_end)
+    if tagged is not None:
+        return {
+            "quarter_end": fy_end,
+            "revenue": tagged,
+            "prior_quarter_end": prior_fy,
+            "prior_revenue": series["mrq_revenue"]["values"].get(prior_fy),
+            "growth_pct": _pct(tagged, series["mrq_revenue"]["values"].get(prior_fy)),
+            "concept": series["mrq_revenue"]["concepts"][0]
+            if series["mrq_revenue"]["concepts"] else None,
+            "source": "10-K (the filer tags a fourth quarter)",
+            "basis": "tagged as a discrete quarter in the 10-K",
+        }
+    if prior_fy is None:
+        return None
+    concept, rows = _quarterly_rows(facts, DURATION_CONCEPTS["revenue"], after=prior_fy)
+
+    def q4(year_end, year_start):
+        """Fiscal year less the last year-to-date 10-Q inside it.
+
+        The annual leg is read off `concept` specifically, not off the merged
+        series: `_merge` walks a priority list and can't say afterwards which
+        concept supplied a given year. A filer that tags revenue including
+        assessed tax annually and excluding it quarterly would otherwise have
+        the two definitions differenced — the exact mismatch `_quarterly_rows`
+        exists to prevent one line up.
+        """
+        annual = _annual_value(facts, concept, year_end)
+        inside = [r["end"] for r in rows if year_start and year_start < r["end"] < year_end]
+        last = _pick_ytd(rows, max(inside)) if inside and annual is not None else None
+        return (annual - last["val"], last["end"]) if last else (None, None)
+
+    value, through = q4(fy_end, prior_fy)
+    prior, _ = q4(prior_fy, years[-3] if len(years) > 2 else None)
+    return {
+        "quarter_end": fy_end,
+        "revenue": value,
+        "prior_quarter_end": prior_fy,
+        "prior_revenue": prior,
+        "growth_pct": _pct(value, prior),
+        "concept": concept,
+        "source": "10-K less the year's last 10-Q",
+        "basis": "the fiscal year less year-to-date through {} — this filer tags no fourth "
+                 "quarter".format(through) if value is not None else
+                 "no fourth quarter is tagged in the 10-K, and there is no year-to-date 10-Q "
+                 "inside the fiscal year on the same concept to difference the year against",
+    }
+
+
+# --- the balance sheet, as of the newest filing --------------------------
+#
+# Stock items take no LTM arithmetic and no roll-forward: whatever the most
+# recent filing states is the number. Deliberately independent of ttm(), which
+# returns None when the prior-year comparable is missing — a balance sheet needs
+# no comparable, so a missing one must not take the snapshot down with it.
+
+# Every filer tags assets and equity every quarter; cash is the backstop for a
+# shell or a fund that somehow doesn't.
+BALANCE_ANCHORS = ["Assets", "StockholdersEquity", "CashAndCashEquivalentsAtCarryingValue"]
+
+# How far past the year end a balance sheet may sit and still belong to this
+# filing's forward window. Tighter than TTM_MAX_GAP_DAYS, and the gap between
+# the two numbers is the whole point: the *next* fiscal year end lands at ~364
+# days, inside a 400-day window. On a default run that filing doesn't exist yet,
+# but with --year it does, and picking it up would hand back the following
+# year's audited balance sheet as "the latest 10-Q". A Q3 balance sheet is the
+# furthest legitimate hit, ~275 days out, and a Q3 cover-page date ~310.
+SNAPSHOT_MAX_GAP_DAYS = 340
+
+
+def _latest_instant_date(facts, fy_end):
+    """Newest balance-sheet date in a 10-K or 10-Q at or after `fy_end`.
+
+    Capped short of the next fiscal year end, so pulling an old 10-K with --year
+    gets that filing's own following quarters rather than a later year.
+    """
+    cutoff = (date.fromisoformat(fy_end) + timedelta(days=SNAPSHOT_MAX_GAP_DAYS)).isoformat()
+    ends = [
+        r["end"]
+        for concept in BALANCE_ANCHORS
+        for r in _units(facts.get(concept, {}))
+        if "start" not in r and r.get("form") in ("10-K", "10-Q")
+        and fy_end <= r["end"] <= cutoff
+    ]
+    return max(ends) if ends else None
+
+
+def _latest_share_count(facts, dei, end, fy_end):
+    """Cover-page shares outstanding and weighted-average diluted, newest first.
+
+    Two different counts, both reported, neither substituted for the other: the
+    cover page states shares actually outstanding on a date after the quarter
+    closed, while the income statement's diluted count is a weighted average
+    over the quarter. A model wants to know which cell it is wiring.
+    """
+    cutoff = (date.fromisoformat(fy_end) + timedelta(days=SNAPSHOT_MAX_GAP_DAYS)).isoformat()
+    cover_rows = [
+        r for r in dei.get("EntityCommonStockSharesOutstanding", {})
+        .get("units", {}).get("shares", [])
+        if fy_end <= r["end"] <= cutoff
+    ]
+    cover = max(cover_rows, key=lambda r: (r["end"], r["filed"])) if cover_rows else None
+
+    diluted, concept = None, None
+    for name in DURATION_CONCEPTS["shares_diluted"]:
+        rows = [
+            r for r in _units(facts.get(name, {}))
+            if "start" in r and r.get("form") in ("10-K", "10-Q") and r["end"] == end
+        ]
+        if rows:
+            # Shortest period ending that day is the quarter, not the year to
+            # date; a restatement of the same period tie-breaks on filing date.
+            shortest = min(_duration_days(r) for r in rows)
+            diluted = max((r for r in rows if _duration_days(r) == shortest),
+                          key=lambda r: r["filed"])
+            concept = name
+            break
+    return {
+        "cover_page": cover["val"] if cover else None,
+        "cover_page_as_of": cover["end"] if cover else None,
+        "cover_page_form": cover.get("form") if cover else None,
+        "cover_page_note": None if cover else
+        "not in companyfacts — multi-class filers tag this per class, and the API "
+        "carries undimensioned facts only. valuation.md reads it off the rendered "
+        "cover page instead.",
+        "weighted_average_diluted": diluted["val"] if diluted else None,
+        "weighted_average_diluted_days": _duration_days(diluted) if diluted else None,
+        "weighted_average_diluted_concept": concept,
+    }
+
+
+def snapshot(companyfacts, fy_end):
+    """The balance sheet as of the most recent 10-K or 10-Q. No LTM math.
+
+    Every line comes from one filing on one date, so cash, debt, assets and
+    inventory are internally consistent rather than assembled from whichever
+    filing tagged each concept last.
+    """
+    facts = companyfacts.get("facts", {}).get("us-gaap", {})
+    end = _latest_instant_date(facts, fy_end)
+    if end is None:
+        return None
+
+    values, concepts, form, filed, accession = {}, {}, None, None, None
+    for name, cs in INSTANT_CONCEPTS.items():
+        used, vals = _merge(facts, cs, lambda r: "start" not in r and r["end"] == end)
+        values[name] = vals.get(end)
+        concepts[name] = used[0] if used else None
+    # Which filing this balance sheet *is*, not which one restated it last. A
+    # year-end balance sheet reappears as the comparative column in the next
+    # three 10-Qs, all filed later, so latest-filed-wins would label the 10-K's
+    # own balance sheet a 10-Q and point at the wrong accession.
+    expected = "10-K" if end == fy_end else "10-Q"
+    for concept in BALANCE_ANCHORS:
+        rows = [r for r in _units(facts.get(concept, {}))
+                if "start" not in r and r["end"] == end and r.get("form") == expected]
+        if rows:
+            row = min(rows, key=lambda r: r["filed"])
+            form, filed, accession = row.get("form"), row.get("filed"), row.get("accn")
+            break
+
+    # Same derive() the annual rows go through, so total debt is built by the
+    # one routine that knows which debt concepts overlap.
+    synthetic = {name: {"values": {}} for name in
+                 list(DURATION_CONCEPTS) + list(INSTANT_CONCEPTS) + list(QUARTERLY_CONCEPTS)}
+    for name, v in values.items():
+        synthetic[name]["values"][end] = v
+    d = derive(synthetic, [end])[end]
+
+    return {
+        "as_of": end,
+        "form": form,
+        "filed": filed,
+        "accession": accession,
+        "values": values,
+        "concepts": concepts,
+        "total_debt": d["total_debt"],
+        "debt_basis": d["debt_basis"],
+        "cash_and_st_investments": d["cash_and_st_investments"],
+        "net_cash": d["net_cash"],
+        "shares": _latest_share_count(facts, companyfacts.get("facts", {}).get("dei", {}),
+                                      end, fy_end),
+    }
+
+
 # --- rendering -----------------------------------------------------------
 
 MILLIONS = {
@@ -996,8 +1287,110 @@ def demo():
     assert bt["quarter_end"] == "2025-09-27" and bt["values"]["net_income"] == 112e6
     assert bt["values"]["revenue"] is None and "revenue" in bt["not_tagged"]
 
+    # --- the most recent quarter -----------------------------------------
+    # Costco's real shape: discrete quarters alongside cumulative ones ending
+    # the same day. Both are already in the fixture above.
+    full = build(tf)
+    m = full["mrq"]
+    assert m["quarter_end"] == "2025-09-27" and m["revenue"] == 300e6, m
+    assert m["prior_quarter_end"] == "2024-09-28" and m["prior_revenue"] == 280e6, m
+    assert m["growth_pct"] == 7.1 and m["basis"] == "tagged as a discrete quarter", m
+    # 300 is the discrete quarter; 850 is the year to date ending the same day.
+    assert m["revenue"] != 850e6, "cumulative period returned as a quarter"
+
+    # A filer that tags no discrete quarter: the difference of two cumulative
+    # periods sharing a fiscal-year start.
+    ytd_only = {"facts": {"us-gaap": {
+        "Revenues": {"units": {"USD": [
+            r for r in tg["Revenues"]["units"]["USD"]
+            if "start" not in r or _duration_days(r) > QUARTER_MAX_DAYS
+        ] + [q10("2024-12-29", "2025-06-28", 550e6)]}},
+    }}}
+    ym = mrq(ytd_only["facts"]["us-gaap"],
+             {"revenue": {"values": {"2024-12-28": 1000e6}},
+              "mrq_revenue": {"values": {}, "concepts": []}},
+             ["2023-12-30", "2024-12-28"])
+    assert ym["revenue"] == 300e6, ym          # 850 year-to-date − 550 at the half
+    assert "less year-to-date" in ym["basis"], ym["basis"]
+
+    # No 10-Q since the year end: the fourth quarter is the year less the last
+    # year-to-date 10-Q inside it. Costco's real numbers: 275,235 − 189,079.
+    no_q = {"facts": {"us-gaap": {c: {"units": {u: [
+        r for r in rows if not (r.get("form") == "10-Q" and r["end"] > "2024-12-28")]
+        for u, rows in d["units"].items()}} for c, d in tg.items()}}}
+    q4 = build(no_q)["mrq"]
+    assert q4["quarter_end"] == "2024-12-28", q4
+    assert q4["revenue"] == 1000e6 - 780e6, q4   # the year less its last 39-week 10-Q
+    assert "no fourth quarter" in q4["basis"], q4["basis"]
+
+    # Both legs of that subtraction must come from the same concept. Here the
+    # 10-Qs report `Revenues` while the annual series *merges* in a
+    # higher-priority concept the 10-Qs never use — reading the year off the
+    # merged series would difference two definitions of revenue.
+    mixed = {"facts": {"us-gaap": dict(no_q["facts"]["us-gaap"])}}
+    mixed["facts"]["us-gaap"].update(
+        dur("RevenueFromContractWithCustomerExcludingAssessedTax", {"2024-12-28": 1200e6}))
+    mixed_built = build(mixed)
+    assert mixed_built["series"]["revenue"]["values"]["2024-12-28"] == 1200e6, "fixture wrong"
+    assert mixed_built["mrq"]["revenue"] == 1000e6 - 780e6, mixed_built["mrq"]
+
+    # A year the 10-Q concept has no annual row for is a blank with a reason,
+    # not a number differenced out of the wrong concept.
+    assert _annual_value(tgf, "Revenues", "2024-12-28") == 1000e6
+    assert _annual_value(tgf, "Revenues", "2099-12-31") is None
+    assert _annual_value(tgf, None, "2024-12-28") is None
+
+    # --- the balance-sheet snapshot ---------------------------------------
+    tf["facts"]["dei"] = {"EntityCommonStockSharesOutstanding": {"units": {"shares": [
+        {"end": "2025-02-14", "val": 501e6, "form": "10-K", "filed": "2025-02-14"},
+        {"end": "2025-10-20", "val": 498e6, "form": "10-Q", "filed": "2025-10-20"},
+    ]}}}
+    tg["WeightedAverageNumberOfDilutedSharesOutstanding"] = {"units": {"shares": [
+        {**q10("2024-12-29", "2025-09-27", 505e6), "form": "10-Q"},
+        {**q10("2025-06-29", "2025-09-27", 503e6), "form": "10-Q"},
+    ]}}
+    # LongTermDebtCurrent of exactly 0 is a real zero, not a missing value: it
+    # must not stop total debt resolving to the noncurrent figure.
+    tg["LongTermDebtCurrent"] = {"units": {"USD": [
+        {"end": "2025-09-27", "val": 0, "form": "10-Q", "filed": "2025-10-01"}]}}
+    tg["Assets"] = {"units": {"USD": [
+        {"end": "2024-12-28", "val": 800e6, "form": "10-K", "filed": "2025-02-14"},
+        {"end": "2024-12-28", "val": 800e6, "form": "10-Q", "filed": "2025-10-01"},
+        {"end": "2025-09-27", "val": 900e6, "form": "10-Q", "filed": "2025-10-01"}]}}
+    tg["InventoryNet"] = {"units": {"USD": [
+        {"end": "2025-09-27", "val": 190e6, "form": "10-Q", "filed": "2025-10-01"}]}}
+    tg["ShortTermInvestments"] = {"units": {"USD": [
+        {"end": "2025-09-27", "val": 10e6, "form": "10-Q", "filed": "2025-10-01"}]}}
+    snap = build(tf)["snapshot"]
+    assert snap["as_of"] == "2025-09-27" and snap["form"] == "10-Q", snap
+    assert snap["values"]["total_assets"] == 900e6 and snap["values"]["inventory"] == 190e6
+    assert snap["cash_and_st_investments"] == 80e6, snap["cash_and_st_investments"]
+    assert snap["total_debt"] == 30e6, snap["total_debt"]  # 30 noncurrent + a real 0
+    # Two counts, both reported, neither substituted for the other.
+    assert snap["shares"]["cover_page"] == 498e6, snap["shares"]
+    assert snap["shares"]["cover_page_as_of"] == "2025-10-20"
+    assert snap["shares"]["weighted_average_diluted"] == 503e6, "took the year to date"
+
+    # A year-end balance sheet reappears as the comparative column of the next
+    # three 10-Qs. The snapshot must name the 10-K, not the last filing to
+    # restate it. (Same facts, every later 10-Q row removed.)
+    q4_snap = build(no_q)["snapshot"]
+    assert q4_snap["as_of"] == "2024-12-28" and q4_snap["form"] == "10-K", q4_snap
+
+    # --year: the *next* fiscal year end sits ~364 days out, inside the 400-day
+    # window the TTM roll uses. Pulling an old 10-K must not pick it up and hand
+    # back a later year's audited balance sheet labelled as this one's 10-Q.
+    tg["Assets"]["units"]["USD"].append(
+        {"end": "2025-12-27", "val": 1200e6, "form": "10-K", "filed": "2026-02-14"})
+    back = build(tf, as_of="2024-12-28")["snapshot"]
+    assert back["as_of"] == "2025-09-27", back["as_of"]  # Q3, not the next year end
+    assert SNAPSHOT_MAX_GAP_DAYS < 364, "the window must stop short of the next fiscal year end"
+    # And the balance sheet still has to reach the furthest legitimate quarter.
+    assert (date.fromisoformat("2025-09-27") - date.fromisoformat("2024-12-28")).days \
+        < SNAPSHOT_MAX_GAP_DAYS
+
     print("ok: trends — duration/instant split, restatement pick, debt shapes, "
-          "EBIT/EBITDA, TTM roll-forward")
+          "EBIT/EBITDA, TTM roll-forward, MRQ, balance-sheet snapshot")
 
 
 if __name__ == "__main__":

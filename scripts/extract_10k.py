@@ -40,6 +40,39 @@ DEFAULT_OUT = Path(__file__).resolve().parent.parent / "filings"
 # so it never reaches companyfacts; read off the rendered statement instead.
 MEMBERSHIP_RE = re.compile(r"membership\s+(fee|due|income)", re.I)
 
+
+def membership_ltm(fy_value, q_table, fy_end, quarter_end):
+    """Membership fee income rolled to the trailing twelve months.
+
+    Same arithmetic as every other flow item — fiscal year + year-to-date −
+    prior-year to date — but it can't come from companyfacts, so both quarterly
+    legs are read off the 10-Q's own rendered income statement, which prints the
+    current and prior-year periods side by side. One table, both legs, no
+    concept-mismatch risk.
+    """
+    cells = statements.line_periods(q_table, MEMBERSHIP_RE)
+    if fy_value is None or len(cells) < 2:
+        return None
+    current, prior = cells[0], cells[1]
+    # The two legs have to cover the same span, or this subtracts eight months
+    # of fees from a quarter's worth.
+    if current["months"] != prior["months"] or not current["months"]:
+        return None
+    return {
+        "value": fy_value + current["value"] - prior["value"],
+        "fiscal_year": fy_value,
+        "year_to_date": current["value"],
+        "prior_year_to_date": prior["value"],
+        "months": current["months"],
+        "basis": "FY {} ({}) + {} − {}, the {}-month periods to {} and to {} off the 10-Q's "
+                 "own rendered income statement".format(
+                     fy_end, "${:,.0f}M".format(fy_value / 1e6),
+                     "${:,.0f}M".format(current["value"] / 1e6),
+                     "${:,.0f}M".format(prior["value"] / 1e6),
+                     current["months"], quarter_end,
+                     prior["column"].split(" (")[0]),
+    }
+
 # Below this a section is a stub or a cross-reference, not something to condense.
 CONDENSE_MIN_CHARS = 3000
 
@@ -152,7 +185,7 @@ def ttm_section(t, val):
     def fmt(v, money=True):
         if v is None:
             return "—"
-        return "${:,.0f}M".format(v / 1e6) if money else "${:,.2f}".format(v)
+        return valuation._m(v) if money else "${:,.2f}".format(v)
 
     lines = [
         "## Trailing twelve months",
@@ -225,6 +258,203 @@ def ttm_section(t, val):
     return lines
 
 
+def membership_from_10q(client, cik, subs, quarter_end, fy_value, fy_end):
+    """Fetch the 10-Q for `quarter_end` and roll the membership line forward.
+
+    Two requests — the filing summary and the one rendered income statement —
+    and only for a filer that reports the line at all. Any failure returns None:
+    a missing LTM row falls back to the annual figure, which is labelled as such.
+    """
+    try:
+        tenq = next(
+            (f for f in client.list_filings(cik, subs, "10-Q", need=4)
+             if f["report_date"] == quarter_end), None)
+        if not tenq:
+            return None
+        reports = statements.parse_filing_summary(
+            client.filing_file(cik, tenq["accession_plain"], "FilingSummary.xml"))
+        rep = next((r for r in reports if r["kind"] == "statement"
+                    and statements.canonical_name(r["short"]) == "income_statement"), None)
+        if not rep:
+            return None
+        table = statements.parse_report(
+            client.filing_file(cik, tenq["accession_plain"], rep["file"]))
+        return membership_ltm(fy_value, table, fy_end, quarter_end)
+    except Exception as e:
+        print("  warning: membership fee LTM roll skipped ({}: {})".format(type(e).__name__, e))
+        return None
+
+
+def latest_section(data, val):
+    """The model-ready block: LTM flows, the balance sheet snapshot, the price.
+
+    Every row states which of the three it is, because they are stamped at three
+    different dates and mixing them is the classic way to build a valuation
+    that's internally inconsistent — a live market cap over a year-old debt
+    balance, or a quarter's revenue annualised by accident.
+    """
+    t, mrq, snap = data.get("ttm"), data.get("mrq"), data.get("snapshot")
+    fee, sh = (data.get("statement_lines") or {}).get("membership_ltm"), {}
+    fy = data["fiscal_year_ends"][-1] if data["fiscal_year_ends"] else "—"
+    q = val.get("quote") or {}
+
+    m = valuation._m
+
+    if data.get("quarters_skipped"):
+        return [
+            "## Latest data",
+            "",
+            "Skipped with `--no-ttm`. The trailing-twelve-month roll-forward, the "
+            "most-recent-quarter revenue and the latest balance-sheet snapshot all read the "
+            "10-Qs filed since this 10-K, and that flag says not to. Everything above is the "
+            "fiscal year as filed. Re-run without it for the current figures.",
+            "",
+        ]
+
+    lines = [
+        "## Latest data — LTM flows, latest balance sheet, live price",
+        "",
+        "Three different vintages, labelled as such:",
+        "",
+        "- **Flow items are LTM** — the audited fiscal year plus this year's "
+        "year-to-date less last year's, so twelve months of trading ending at the "
+        "most recent quarter.",
+        "- **Stock items are a snapshot** — whatever the latest filing's balance "
+        "sheet states, no arithmetic at all.",
+        "- **The price is {}**.".format(
+            "live, from a quote feed rather than a filing" if q.get("is_live")
+            else "the filing's own — see the Valuation section above"),
+        "",
+    ]
+    if not t:
+        lines += [
+            "No LTM column: no 10-Q post-dates this 10-K with a comparable prior-year "
+            "period, so the flow rows below fall back to the fiscal year as filed.",
+            "",
+        ]
+    v = (t or {}).get("values", {})
+    annual = data["series"]
+    d = data["derived"].get(fy, {})
+
+    def flow(key):
+        """The LTM figure, or the fiscal year when there's nothing to roll with.
+
+        Three different reasons a row can be the annual figure, and they say
+        different things about the company: no 10-Q exists yet (the audited year
+        *is* the trailing twelve months), the 10-Qs exist but don't tag this
+        line, or nobody tags it anywhere.
+        """
+        if v.get(key) is not None:
+            return m(v[key]), "10-K + 10-Q (LTM to {})".format(t["quarter_end"])
+        year = annual.get(key, {}).get("values", {}).get(fy)
+        if year is None:
+            return "—", "not tagged by this filer, in either form"
+        if not t:
+            return m(year), "10-K — no 10-Q since the year end, so this is the trailing year"
+        return m(year), "10-K only — not tagged in the 10-Qs"
+
+    lines += [
+        "| Field | Value | Source |",
+        "|---|---|---|",
+    ]
+    for label, key in [
+        ("Revenue", "revenue"),
+        ("Operating income", "operating_income"),
+        ("D&A", "d_and_a"),
+        ("Net income", "net_income"),
+        ("Cash from ops", "operating_cash_flow"),
+        ("Capex", "capex"),
+    ]:
+        value, source = flow(key)
+        lines.append("| {} | {} | {} |".format(label, value, source))
+
+    annual_fee = (data.get("statement_lines") or {}).get("membership_fee_income")
+    if fee:
+        lines.append("| Membership fee income | {} | 10-K + 10-Q (LTM), off the rendered "
+                     "income statements |".format(m(fee["value"])))
+    elif annual_fee is not None:
+        # Three different reasons the roll didn't happen, and they aren't
+        # interchangeable: no quarter to roll to at all is not the same as a
+        # 10-Q that doesn't break the line out.
+        why = ("the 10-K is the newest filing, so the fiscal year is the trailing twelve months"
+               if not (mrq and mrq["quarter_end"] > fy)
+               else "10-K only — the 10-Q's income statement doesn't break the line out")
+        lines.append("| Membership fee income | {} | {} |".format(m(annual_fee), why))
+
+    if mrq and mrq["revenue"] is not None:
+        lines += [
+            "| MRQ revenue | {} | {}, quarter ended {} |".format(
+                m(mrq["revenue"]), mrq["source"], mrq["quarter_end"]),
+            "| MRQ revenue (prior year) | {} | same quarter ended {}{} |".format(
+                m(mrq["prior_revenue"]), mrq["prior_quarter_end"] or "—",
+                "" if mrq["growth_pct"] is None else " — {:+.1f}% YoY".format(mrq["growth_pct"])),
+        ]
+    else:
+        lines.append("| MRQ revenue | — | {} |".format(
+            mrq["basis"] if mrq else
+            "no quarterly revenue is tagged in this filer's 10-Qs and its 10-K tags no fourth "
+            "quarter — banks are the usual case"))
+
+    if snap:
+        s, sh = snap["values"], snap["shares"]
+        where = "{} balance sheet, {}".format(snap["form"] or "latest filing", snap["as_of"])
+        # A multi-class filer tags the cover-page count per class, and the
+        # companyfacts API carries undimensioned facts only — so fall back to
+        # the count the annual pass already read off the rendered cover page.
+        # Older by a quarter or two, and labelled as such, but not blank.
+        cover_10k = (val["shares"] or {}).get("cover_page") or {}
+        if sh["cover_page"] is None and cover_10k.get("total"):
+            sh = dict(
+                sh, cover_page=cover_10k["total"], cover_page_form="10-K",
+                cover_page_as_of=cover_10k.get("as_of"),
+                cover_page_note="this filer tags the cover-page count per share class, and "
+                                "companyfacts carries undimensioned facts only — so the count "
+                                "above is the 10-K's own rendered cover page rather than the "
+                                "10-Q's, and is a quarter or two older. `valuation.md` splits "
+                                "it by class.")
+        lines += [
+            "| Cash + ST investments | {} | {} |".format(m(snap["cash_and_st_investments"]), where),
+            "| Total debt | {} | {} |".format(m(snap["total_debt"]), where),
+            "| Total assets | {} | {} |".format(m(s["total_assets"]), where),
+            "| Inventory | {} | {} |".format(m(s["inventory"]), where),
+            "| Shares outstanding | {} | {} |".format(
+                "—" if sh["cover_page"] is None else "{:,.0f}".format(sh["cover_page"]),
+                "not in companyfacts — see below" if sh["cover_page"] is None
+                else "{} cover page, as of {}".format(
+                    sh["cover_page_form"] or "latest filing", sh["cover_page_as_of"])),
+            "| Diluted shares (weighted average) | {} | {} |".format(
+                "—" if sh["weighted_average_diluted"] is None
+                else "{:,.0f}".format(sh["weighted_average_diluted"]),
+                "not tagged for this period" if sh["weighted_average_diluted"] is None
+                else "{} income statement, the {}-day period to {}".format(
+                    snap["form"] or "latest filing",
+                    sh["weighted_average_diluted_days"], snap["as_of"])),
+        ]
+    lines += [
+        "| Share price | {} | {} |".format(
+            "—" if not q.get("price") else "${:,.2f}".format(q["price"]),
+            q.get("source") or q.get("error") or "—"),
+        "",
+    ]
+    if sh.get("cover_page_note"):
+        lines += ["Shares outstanding: {}".format(sh["cover_page_note"]), ""]
+    lines += [
+        "The two share counts are different numbers and both are here on purpose. The cover "
+        "page states shares actually outstanding weeks *after* the quarter closed; the diluted "
+        "count is a weighted average *across* the quarter, including the dilutive effect of "
+        "awards. Market cap wants the first, per-share earnings the second.",
+        "",
+        "Total debt {}.".format(
+            (snap or {}).get("debt_basis") or "could not be built from tagged concepts"),
+        "",
+    ]
+    if fee:
+        lines += ["Membership fee income: {}.".format(fee["basis"]), ""]
+    if mrq and mrq["revenue"] is not None and mrq.get("basis"):
+        lines += ["MRQ revenue: {}.".format(mrq["basis"]), ""]
+    return lines
+
+
 def summary_markdown(meta, data, secs, files, summaries, risk_heads, diff, stmt_names, val):
     years = data["fiscal_year_ends"]
     latest = years[-1] if years else None
@@ -233,12 +463,10 @@ def summary_markdown(meta, data, secs, files, summaries, risk_heads, diff, stmt_
     lines_from_statement = data.get("statement_lines", {})
 
     def money(key):
-        v = s.get(key, {}).get("values", {}).get(latest)
-        return "—" if v is None else "${:,.0f}M".format(v / 1e6)
+        return valuation._m(s.get(key, {}).get("values", {}).get(latest))
 
     def dmoney(key):
-        v = d.get(key)
-        return "—" if v is None else "${:,.0f}M".format(v / 1e6)
+        return valuation._m(d.get(key))
 
     def count(key):
         v = s.get(key, {}).get("values", {}).get(latest)
@@ -377,6 +605,7 @@ def summary_markdown(meta, data, secs, files, summaries, risk_heads, diff, stmt_
         lines += ["> {}".format(v["market_cap_warning"]), ""]
     lines += ["Full bridge, the share-count sources, and the footnote rows: `valuation.md`.", ""]
 
+    lines += latest_section(data, val)
     lines += ttm_section(data.get("ttm"), v)
 
     if len(years) > 1:
@@ -480,7 +709,9 @@ def run(args):
     out_dir = Path(args.out or DEFAULT_OUT) / ticker / filing["report_date"]
     if (out_dir / "SUMMARY.md").exists() and not args.refresh:
         print("Already extracted: {}".format(out_dir))
-        print("Pass --refresh to re-download.")
+        # Filings never change, so re-reading them buys nothing — but the share
+        # price in there was live when it was written and isn't now.
+        print("Pass --refresh to re-download (and to re-price at a current quote).")
         return out_dir
 
     source_url = EDGAR_FILING_INDEX.format(
@@ -567,7 +798,14 @@ def run(args):
         "membership_fee_income": fee,
         "membership_fee_column": fee_col,
         "source": "as-filed income statement" if fee is not None else None,
+        "membership_ltm": None,
     }
+    # Only a filer that actually reports the line pays for the two extra
+    # requests that roll it forward.
+    quarter = (data.get("mrq") or {}).get("quarter_end")
+    if fee is not None and quarter and quarter > filing["report_date"]:
+        data["statement_lines"]["membership_ltm"] = membership_from_10q(
+            client, cik, subs, quarter, fee, filing["report_date"])
     write(out_dir / "trends.json", json.dumps(data, indent=2))
     write(out_dir / "trends.md", trends.to_markdown(data, subs["name"]))
     print("  trends: {} fiscal years, {} metrics not tagged".format(
@@ -586,7 +824,28 @@ def run(args):
     elif args.no_price:
         quote = {"price": None, "error": "skipped with --no-price"}
     else:
-        quote = valuation.filing_price(facts, filing["accession"], cover)
+        # A live quote by default, because a market cap is the one figure here
+        # that has no business being nine months stale. The filing's own
+        # cover-page arithmetic is the fallback when the feed is unreachable —
+        # and the only price used at all with --filing-price.
+        #
+        # --year is the other case that must not get one. Everything else in a
+        # historical run is stamped to that fiscal year; today's quote over a
+        # 2019 share count is not a 2019 market cap, it's two eras multiplied
+        # together. The cover page carries a price contemporary with the filing,
+        # which is the whole point of asking for an old one.
+        historical = bool(args.year)
+        quote = None if args.filing_price or historical else valuation.live_quote(ticker)
+        if historical:
+            print("    --year: pricing off the cover page, not a live quote — a current "
+                  "price over a {} share count isn't a {} market cap".format(
+                      args.year, args.year))
+        if not (quote or {}).get("price"):
+            failed = (quote or {}).get("error")
+            quote = valuation.filing_price(facts, filing["accession"], cover)
+            if failed:
+                quote["fell_back_from"] = failed
+                print("    {} — falling back to the cover page".format(failed))
     val = valuation.build(
         data["series"], data["derived"], filing["report_date"],
         cover, awards, quote, shares_override=args.shares,
@@ -655,12 +914,17 @@ def main():
     p.add_argument("--shares", type=float,
                    help="share count for the market cap, overriding the cover page "
                         "(needed for multi-class filers like BRK)")
+    p.add_argument("--filing-price", action="store_true",
+                   help="don't fetch a live quote — price the company off its own cover page "
+                        "(public float / shares outstanding), which is what the filing supports")
     p.add_argument("--no-price", action="store_true",
                    help="skip the price — everything but market cap, EV and the multiples")
     p.add_argument("--no-diff", action="store_true", help="skip the prior-year risk factor diff")
     p.add_argument("--no-ttm", action="store_true",
-                   help="skip the trailing-twelve-month roll-forward — the 10-K year only, "
-                        "with nothing from the 10-Qs filed since")
+                   help="the 10-K year only, with nothing from the 10-Qs filed since — this "
+                        "drops the trailing-twelve-month roll-forward, the most-recent-quarter "
+                        "revenue and the latest balance-sheet snapshot, all three of which read "
+                        "the 10-Qs")
     p.add_argument("--refresh", action="store_true", help="ignore the cache and re-download")
     p.add_argument("--out", help="output directory (default: ../filings)")
     args = p.parse_args()
@@ -672,5 +936,50 @@ def main():
         sys.exit(1)
 
 
+def demo():
+    """python3 extract_10k.py --self-check — offline, nothing touches the network."""
+    # BJ's Q1 shape: 3-month columns only, the membership line rendered as a
+    # dimension header with the numbers two rows below it.
+    q1 = {
+        "units": "Condensed Consolidated Statements of Income - USD ($) $ in Thousands",
+        "columns": ["Line item", "May 02, 2026 (3 Months Ended)", "May 03, 2025 (3 Months Ended)"],
+        "periods": ["", "3 Months Ended", "3 Months Ended"],
+        "rows": [
+            ["Total net sales", "$ 5,530,000", "$ 5,033,000"],
+            ["Membership fee income", "", ""],
+            ["REVENUE", "", ""],
+            ["Total revenue", "$ 132,000", "$ 120,000"],
+        ],
+    }
+    roll = membership_ltm(500e6, q1, "2026-01-31", "2026-05-02")
+    assert roll["value"] == 512e6, roll          # 500 + 132 − 120
+    assert roll["months"] == 3 and roll["year_to_date"] == 132e6, roll
+
+    # Costco Q3: the cumulative pair, not the discrete one rendered to its left.
+    q3 = {
+        "units": "Condensed Consolidated Statements Of Income - USD ($) $ in Millions",
+        "columns": ["Line item", "May 10, 2026 (3 Months Ended)", "May 11, 2025 (3 Months Ended)",
+                    "May 10, 2026 (8 Months Ended)", "May 11, 2025 (8 Months Ended)"],
+        "periods": ["", "3 Months Ended", "3 Months Ended", "8 Months Ended", "8 Months Ended"],
+        "rows": [["Membership fees", "", "", "", ""],
+                 ["Total Revenue", "$ 1,373", "$ 1,240", "$ 4,057", "$ 3,599"]],
+    }
+    assert membership_ltm(5323e6, q3, "2025-08-31", "2026-05-10")["value"] == 5781e6
+
+    # No annual figure, no line in the 10-Q, or a single column to difference
+    # against nothing: a missing row, never a half-built one.
+    assert membership_ltm(None, q3, "2025-08-31", "2026-05-10") is None
+    assert membership_ltm(500e6, {"units": "", "columns": ["Line item"], "rows": []},
+                          "2026-01-31", "2026-05-02") is None
+    one_col = dict(q3, columns=["Line item", "May 10, 2026 (8 Months Ended)"],
+                   periods=["", "8 Months Ended"],
+                   rows=[["Membership fees", ""], ["Total Revenue", "$ 4,057"]])
+    assert membership_ltm(5323e6, one_col, "2025-08-31", "2026-05-10") is None
+    print("ok: extract_10k — membership fee LTM roll")
+
+
 if __name__ == "__main__":
-    main()
+    if "--self-check" in sys.argv:
+        demo()
+    else:
+        main()

@@ -21,6 +21,7 @@ Two gotchas, both hit while building this:
 import io
 import re
 import warnings
+from datetime import date
 
 import pandas as pd
 
@@ -161,25 +162,54 @@ def _money(cell):
     return -value if neg else value
 
 
-ANNUAL_PERIOD_RE = re.compile(r"1[23] months", re.I)
+PERIOD_MONTHS_RE = re.compile(r"(\d+)\s*months?", re.I)
+COLUMN_DATE_RE = re.compile(r"([A-Za-z]{3})\w*\.?\s+(\d{1,2}),?\s+(\d{4})")
+MONTHS = {m: i + 1 for i, m in enumerate(
+    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"])}
 
 
-def _annual_columns(table):
-    """Column indices worth reading, most-likely-annual first.
+def _period_months(label):
+    """'8 Months Ended' -> 8. 0 when the header states no period."""
+    m = PERIOD_MONTHS_RE.search(str(label or ""))
+    return int(m.group(1)) if m else 0
+
+
+def _column_date(header):
+    """'May 10, 2026 (8 Months Ended)' -> date(2026, 5, 10). None if undated."""
+    m = COLUMN_DATE_RE.search(str(header))
+    month = MONTHS.get(m.group(1).lower()) if m else None
+    return date(int(m.group(3)), month, int(m.group(2))) if month else None
+
+
+def _period_columns(table):
+    """Column indices, longest reporting period first and newest date first.
 
     A filer that shows quarters alongside the year renders the quarters *first*
     — Costco's 2017 income statement opens with seven 3-month columns and puts
     the twelve-month ones at index 9. Taking the leftmost number there returns a
     quarter's membership fees ($644M) in place of the year's ($2,853M).
+
+    "Longest", not "twelve months": a 10-Q's cumulative column is labelled for
+    however far into the year it reaches — Costco's Q3 says "8 Months Ended" —
+    so a rule that matched 12 or 13 months only would fall through to the
+    leftmost column and hand back a single quarter as if it were the period.
     """
     periods = table.get("periods") or []
     order = list(range(1, len(table["columns"])))
-    annual = [i for i in order if i < len(periods) and ANNUAL_PERIOD_RE.search(periods[i])]
-    return annual + [i for i in order if i not in set(annual)]
+    months = {i: _period_months(periods[i]) if i < len(periods) else 0 for i in order}
+    longest = max(months.values(), default=0)
+    if not longest:
+        return order
+    ranked = [i for i in order if months[i] == longest]
+    dates = {i: _column_date(table["columns"][i]) for i in ranked}
+    if all(dates.values()):
+        ranked.sort(key=lambda i: dates[i], reverse=True)
+    return ranked + [i for i in order if months[i] != longest]
 
 
-def line_value(table, pattern, lookahead=3):
-    """-> (value in dollars, column header) for the first row matching `pattern`.
+def line_periods(table, pattern, lookahead=3):
+    """-> [{column, months, value}] — every numeric cell on the first row
+    matching `pattern`, longest period and newest date first.
 
     For revenue split by product or service — Costco's membership fees, and any
     other line the filer tags along a dimension — the rendered statement is the
@@ -190,23 +220,39 @@ def line_value(table, pattern, lookahead=3):
     ("Membership fees"), then repeats the statement's own labels underneath it
     ("REVENUE", "Total revenue | $ 5,323"). So a match walks forward a few rows
     until it finds numbers rather than giving up on the empty label row.
+
+    Every cell, not just the first, because a 10-Q states the current and
+    prior-year periods side by side — which is exactly the pair an LTM roll
+    needs, and it comes out of one table.
     """
     if not table:
-        return None, None
+        return []
     m = DOLLAR_SCALE_RE.search(table.get("units", ""))
     scale = DOLLAR_SCALES[m.group(1).lower()] if m else 1.0
-    rows, cols = table["rows"], _annual_columns(table)
+    rows, cols = table["rows"], _period_columns(table)
+    periods = table.get("periods") or []
     for i, row in enumerate(rows):
         if not pattern.search(row[0]):
             continue
         for candidate in rows[i:i + lookahead + 1]:
-            for col in cols:
-                if col >= len(candidate):
-                    continue
-                value = _money(candidate[col])
-                if value is not None:
-                    return value * scale, table["columns"][col]
-    return None, None
+            found = [
+                {
+                    "column": table["columns"][col],
+                    "months": _period_months(periods[col]) if col < len(periods) else 0,
+                    "value": _money(candidate[col]) * scale,
+                }
+                for col in cols
+                if col < len(candidate) and _money(candidate[col]) is not None
+            ]
+            if found:
+                return found
+    return []
+
+
+def line_value(table, pattern, lookahead=3):
+    """-> (value in dollars, column header) for the first row matching `pattern`."""
+    found = line_periods(table, pattern, lookahead)
+    return (found[0]["value"], found[0]["column"]) if found else (None, None)
 
 
 def to_markdown(title, table):
@@ -335,6 +381,34 @@ def demo():
     }
     value, col = line_value(mixed, re.compile(r"membership\s+fee", re.I))
     assert value == 2853e6 and "12 Months" in col, (value, col)
+
+    # A 10-Q's real shape (Costco Q3 FY2026): two discrete-quarter columns and
+    # two cumulative ones, the cumulative pair labelled "8 Months Ended" rather
+    # than 12. The cumulative pair is what an LTM roll differences; picking the
+    # leftmost column instead would substitute one quarter for eight months.
+    tenq = {
+        "units": "Condensed Consolidated Statements Of Income - USD ($) $ in Millions",
+        "columns": ["Line item", "May 10, 2026 (3 Months Ended)", "May 11, 2025 (3 Months Ended)",
+                    "May 10, 2026 (8 Months Ended)", "May 11, 2025 (8 Months Ended)"],
+        "periods": ["", "3 Months Ended", "3 Months Ended", "8 Months Ended", "8 Months Ended"],
+        "rows": [
+            ["Total Revenue", "$ 70,527", "$ 63,205", "$ 207,431", "$ 189,079"],
+            ["Membership fees", "", "", "", ""],
+            ["REVENUE", "", "", "", ""],
+            ["Total Revenue", "$ 1,373", "$ 1,240", "$ 4,057", "$ 3,599"],
+        ],
+    }
+    cells = line_periods(tenq, re.compile(r"membership\s+fee", re.I))
+    assert [c["value"] for c in cells] == [4057e6, 3599e6, 1373e6, 1240e6], cells
+    assert cells[0]["months"] == 8 and "May 10, 2026" in cells[0]["column"], cells[0]
+    # Newest date first inside the longest-period group, whatever order the
+    # filer rendered them in.
+    flipped = dict(tenq, columns=["Line item", "May 11, 2025 (8 Months Ended)",
+                                  "May 10, 2026 (8 Months Ended)"],
+                   periods=["", "8 Months Ended", "8 Months Ended"],
+                   rows=[["Membership fees", "", ""], ["Total Revenue", "$ 3,599", "$ 4,057"]])
+    assert [c["value"] for c in line_periods(flipped, re.compile(r"membership", re.I))] \
+        == [4057e6, 3599e6]
     print("ok: statements — report classification, biggest-table pick, line lookup, markdown")
 
 

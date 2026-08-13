@@ -1,4 +1,4 @@
-# site — the 10K AI front end
+# site — the Filed front end
 
 The chosen direction is **`v4-icarus.html`**, and it runs the extractor for
 real: type a ticker, get the filing back on the page.
@@ -319,10 +319,39 @@ The other four woff2 files in `assets/fonts` belong to `v1` and `v2`.
 `src_canvas.jpg` and `src_temple.jpg` as inputs). All still on disk, all still
 used by `v3`, none referenced by `v4`.
 
-## Still on the old world
+## The app icon
 
-`assets/app.icns` and `assets/favicon.png` are ink-on-paper, drawn for the
-letterpress direction by `assets/make_icon.py` and installed by `../make_app.sh`.
-The site now uses `assets/favicon-icarus.png`, but **the macOS app icon has not
-been redrawn** — it will sit in the Dock looking like a different product until
-it is.
+`assets/make_icon.py` draws `app.icns` and `../make_app.sh` installs it. It's
+the flyer's head — haloed, in profile — on the same `#222222` ground as the
+page, its bottom cut bleeding off the tile and dissolving into the same
+square-pixel matrix that cuts every plate.
+
+It crops `icarus.webp`, not `src_flyer.jpg`, so it inherits the matte and the
+chroma bleed `make_icarus.py` already pulled from the plate. Re-deriving those
+here would be a second copy of that work, free to drift.
+
+Three settings are load-bearing, all of them arrived at by rendering a contact
+sheet and looking at it:
+
+- `HEAD_W = 0.84`. Wider and the head bleeds off both side edges and reads as
+  one pale mass; the closed silhouette is the last cue still working at 32px.
+- `HEAD_TOP = 1 - HEAD_W`, so the crop's hard bottom edge lands exactly on the
+  tile's and genuinely bleeds. Higher and that cut sits *inside* the tile as a
+  flat pale rectangle.
+- The matrix is dropped below 128px, where a cell is worth less than a pixel
+  and prints as a chewed edge rather than an effect.
+
+Pushing the levels harder at small sizes was tried and reverted — PIL's
+contrast pivots on the mean, so it blew the jaw and neck into one white wedge.
+
+**16px is where this mark gives out.** A photographic head has more information
+than 256 pixels hold, so in the menu bar and list views it's a warm blob. The
+Dock draws it far larger, which is what it's for. `--check` asserts the crop
+hasn't drifted off the head and that the 16px tile still has tonal range — it
+does *not* claim the face reads there. `iconutil` exiting 0 proves nothing
+either way; render the sheet and look.
+
+`assets/favicon.png` is the leftover ink-on-paper mark. Nothing produces it any
+more — `make_icon.py` used to, and doesn't — but `v3-letterpress.html:8` still
+links it, so it stays on disk. `v4`, `index.html` and the server's error page
+all use `assets/favicon-icarus.png`, from `make_icarus.py`.

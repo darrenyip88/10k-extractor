@@ -1,14 +1,17 @@
-# 10-K extractor
+# Filed — a 10-K extractor
 
 Give it a ticker, get back the 10-K and everything useful inside it: each Item as
 its own file plus a condensed version of it, the as-filed financial statements,
 ten years of financials, an index of every risk factor, a diff of this year's
 risks against last year's, and the valuation — real share count, market cap, the
-EV bridge and the multiples.
+EV bridge and the multiples. Then the 10-Qs filed since roll that audited year
+forward to the most recent quarter.
 
-**Every number comes out of a 10-K.** Including the share price: there is no
-quote feed anywhere in this tool, and nothing it prints moves after the filing
-was accepted. See "The price, from the filing" below for what that costs.
+**Every number comes out of a filing — the 10-K, or a 10-Q for the trailing
+twelve months — with exactly one exception, the share price.** That one is a
+live quote, because a market cap is the one figure here with no business being
+nine months stale. `--filing-price` turns it off and prices the company off its
+own cover page instead; see "The price" below for what each costs.
 
 ```bash
 ./run_10k.sh AAPL
@@ -22,18 +25,23 @@ python3 serve.py
 
 Then <http://localhost:4321>. See `site/README.md` for what the server exposes.
 
-Or from the Dock. `./make_app.sh` builds **10K AI.app** into `/Applications`: it
+Or from the Dock. `./make_app.sh` builds **Filed.app** into `/Applications`: it
 starts the server if it isn't already up and opens the site. It's a launcher,
 not a copy — it runs `serve.py` out of this directory, so edits here land in the
 app immediately. Re-run `make_app.sh` if you move the project, because the
-launcher holds absolute paths. Log: `~/Library/Logs/10K AI.log`. To stop the
+launcher holds absolute paths. Log: `~/Library/Logs/Filed.log`. To stop the
 server, `pkill -f serve.py`.
 
-All of it comes from SEC EDGAR. **No API key, no quota, no cost, and no live
-market data.** This matters — FMP's free tier is 250 calls/day and doesn't serve
-10-K text at all, so nothing here touches your FMP budget. A full extraction is
-~17 SEC requests and about 15 seconds cold, instant once cached. `--no-price`
-skips the price and everything downstream of it.
+All of it comes from SEC EDGAR, plus one keyless quote call. **No API key, no
+quota, no cost.** This matters — FMP's free tier is 250 calls/day and doesn't
+serve 10-K text at all, so nothing here touches your FMP budget. A full
+extraction is ~17 SEC requests (two more for a filer that reports membership
+fees) plus that one quote, and about 15 seconds cold, instant once cached.
+`--no-price` skips the price and everything downstream of it.
+
+The quote is deliberately never cached — a cached quote is a stale number
+wearing a live timestamp — but the rest of the run is, so re-running a ticker
+short-circuits before the price is fetched. `--refresh` re-prices.
 
 No LLM calls either. The tool extracts and structures; ask Claude to read the
 output (see `SKILL.md`, which wires up `/10k <TICKER>`).
@@ -43,24 +51,26 @@ output (see `SKILL.md`, which wires up `/10k <TICKER>`).
 ```bash
 ./run_10k.sh AAPL                 # latest 10-K
 ./run_10k.sh BRK.B                # dots and dashes both work
-./run_10k.sh AAPL --year 2019     # an older filing (history is capped at that year too)
+./run_10k.sh AAPL --year 2019     # an older filing (history capped, and priced off its own cover page)
 ./run_10k.sh TSLA --all-tables    # + every note table: segments, geography, debt, leases
 ./run_10k.sh JPM --refresh        # bypass the cache
 ./run_10k.sh SOMECO --cik 12345   # ticker SEC's map doesn't list
-./run_10k.sh AAPL --price 250     # your own price instead of the cover-page one
+./run_10k.sh AAPL --price 250     # your own price instead of the live quote
 ./run_10k.sh BRK.B --shares 2.16e9  # your own share count — needed for multi-class filers
+./run_10k.sh COST --filing-price  # no quote call — price off the cover page instead
 ./run_10k.sh COST --no-price      # no price, so no market cap, EV or multiples
 ```
 
 Output goes to `filings/<TICKER>/<fiscal-year-end>/`. Start with `SUMMARY.md`.
 
 ```
-SUMMARY.md          key numbers, valuation, revenue/EPS history, risk-diff headline, file index
+SUMMARY.md          key numbers, valuation, LTM + snapshot block, revenue/EPS history, risk diff, file index
 metadata.json       CIK, SIC industry, auditor + PCAOB ID, exchange, source URLs
 sections/           item1_business, item1a_risk_factors, item7_mdna, item8_..., 10 in all
 summaries/          the same Items condensed to about a third, every sentence the filer's own
 statements/         income_statement, balance_sheet, cash_flow, equity (.md + .json)
 trends.md/.json     10 years of financials + margins, FCF, ROE, CAGR, share count
+                    (.json also carries ttm, mrq and the balance-sheet snapshot)
 valuation.md/.json  share count three ways, price, market cap, EV bridge, EBIT/EBITDA, multiples
 risk_headings.md    every risk factor headline — the Item 1A index
 risk_diff.md        risks added, removed, and reworded vs last year
@@ -71,14 +81,34 @@ full_text.txt       the whole filing as plain text
 Re-running is a no-op unless you pass `--refresh`. Responses are cached to
 `.cache/` forever, which is safe because filings are immutable once accepted.
 
-## The price, from the filing
+## The price
+
+Live by default: one call to Yahoo's chart endpoint, no key, no quota, and
+never cached. It's the only number in the whole tool that isn't tagged data out
+of EDGAR, and it earns the exception — every other figure is a fact about a
+period that has already closed, while a market cap is a fact about right now.
+An EV/EBITDA built on a fresh LTM numerator and a nine-month-old price is
+wrong in a way that's hard to see.
+
+If the call fails, the run falls back to the filing's own price below and says
+so, rather than dying or printing nothing. `--filing-price` skips the call
+outright; `--price` takes your own number; `--no-price` drops the price and
+everything downstream of it.
+
+`--year` skips it too, automatically. Everything else in a historical run is
+stamped to that fiscal year, and today's quote over a 2019 share count is not a
+2019 market cap — it's two eras multiplied together. The cover page carries a
+price contemporary with the filing, which is the point of asking for an old one.
+
+### The filing's own price, and why it's a floor
 
 A 10-K states no closing price anywhere. The quarterly high/low table stopped
 being required in 2018, and the performance graph is indexed to $100. What every
 cover page does state, and tags in XBRL, is two numbers: the **aggregate market
 value of common equity held by non-affiliates**, measured on the last business
 day of the second fiscal quarter, and the **share count**, taken a few weeks
-after year end. Their quotient is the price this tool uses.
+after year end. Their quotient is a share price — the one this tool used before
+the live quote existed, and the one it falls back to.
 
 It's a floor, and the output says so every time it prints. Two reasons:
 
@@ -91,10 +121,52 @@ It's a floor, and the output says so every time it prints. Two reasons:
 - **The two numbers are months apart**, so a filer that bought back stock in
   between divides by too few shares.
 
-Market cap therefore restates the public float, and `--price` overrides the
-whole thing when you want an outside number. A two-class filer gets no implied
-price at all: one float figure divided by BRK.A plus BRK.B prices the B shares
-at $649 against a real ~$485, so it refuses, the same way the market cap does.
+Market cap on this basis therefore restates the public float. A two-class filer
+gets no implied price at all: one float figure divided by BRK.A plus BRK.B
+prices the B shares at $649 against a real ~$485, so it refuses, the same way
+the market cap does. (The live quote has no such problem — it prices whichever
+class you asked for — but the market cap still refuses, because summing A and B
+shares and applying the B price is wrong by orders of magnitude either way.
+`--shares` is the answer there.)
+
+## Flows, stocks, and the price walk into a spreadsheet
+
+`SUMMARY.md` has a **Latest data** block that is the one table to copy into a
+model. It splits every figure by vintage, because that's the thing that goes
+wrong when you assemble a valuation by hand:
+
+| Kind | What it means | Where it comes from |
+|---|---|---|
+| Flow — LTM | twelve months of trading ending at the latest quarter | 10-K + this year's YTD 10-Q − last year's same YTD |
+| Stock — snapshot | one date, one filing, no arithmetic | the latest 10-Q's balance sheet (the 10-K's, if no 10-Q has been filed since) |
+| Price | right now | live quote |
+
+Flow items: revenue, operating income, D&A, net income, cash from ops, capex,
+and membership fee income for the warehouse clubs. Stock items: cash + ST
+investments, total debt, total assets, inventory, and the share count.
+
+Two things there are worth knowing about.
+
+**Membership fee income doesn't exist in companyfacts.** Costco and BJ's tag it
+along a dimension, and the XBRL company-facts API carries undimensioned facts
+only, so the line is simply absent — no amount of concept-hunting finds it. Both
+LTM legs come off the 10-Q's *rendered* income statement instead, which prints
+the current and prior-year periods side by side, so one table supplies both and
+they can't be a concept apart. Costs two extra requests, and only for a filer
+that reports the line at all.
+
+**MRQ revenue is a discrete quarter, and getting it is fiddlier than it looks.**
+Q2 and Q3 tag a cumulative period ending the same day as the discrete one — pick
+wrong and you report eight months as a quarter. Filers that tag no discrete
+quarter get it differenced out of two year-to-date figures sharing a fiscal-year
+start. And when the 10-K is the newest filing, the most recent quarter *is* Q4,
+which is the year less the last 10-Q inside it (Costco FY2025: 275,235 − 189,079
+= 86,156). `mrq.basis` in `trends.json` states which route was used.
+
+The snapshot is deliberately independent of the TTM roll-forward. The roll needs
+a comparable prior-year period and returns nothing without one — but a balance
+sheet needs no comparable, so a filer that can't be rolled forward still gets
+its cash, debt, assets, inventory and share count.
 
 ## Condensed sections
 
@@ -229,13 +301,16 @@ double-counts.
 by 1000x in a year, so `valuation.md` rescales by the power of ten that lines the
 two up and flags that it did. `trends.md` still shows the raw tagged value.
 
-**Quote feeds were a dead end, and then they turned out to be unnecessary.**
-Stooq's free CSV went behind a JavaScript proof-of-work wall in 2026 and answers
-a script with an HTML challenge page. Yahoo's chart endpoint worked, but it made
-the tool depend on an undocumented endpoint and put one live number next to fifty
-as-filed ones. The cover page has the answer — see "The price, from the filing"
-above — so there is no quote call at all now, and nothing in the output moves
-after the filing date.
+**Only one free quote feed still answers a script.** Stooq's CSV went behind a
+JavaScript proof-of-work wall in 2026 and returns an HTML challenge page.
+Yahoo's chart endpoint (`query1.finance.yahoo.com/v8/finance/chart/<TICKER>`)
+works, keyless, with the same contact-email User-Agent SEC wants, and takes
+SEC's dashed class tickers unchanged (`BRK-B`). It's undocumented, so it is
+wrapped in a bare `except` and falls back to the cover-page price — a valuation
+that loses its market cap because a quote host had a bad minute is worse than
+one priced off the filing. Don't route it through `SECClient.get()`: that cache
+never expires by design, and a cached quote is a stale number wearing a live
+timestamp.
 
 **Section text arrives one line per inline element.** `get_text("\n")` splits on
 every tag boundary, so Apple's "iPhone ® is the Company's line of smartphones"

@@ -38,6 +38,23 @@ def test_valuation():
     valuation.demo()
 
 
+def test_extract():
+    import extract_10k
+
+    extract_10k.demo()
+
+
+@pytest.mark.network
+def test_live_quote():
+    """The one non-SEC call in the project. Undocumented endpoint, so this is
+    the thing that tells you it changed — a failure must still be a dict."""
+    q = valuation.live_quote("AAPL")
+    assert isinstance(q, dict), q
+    assert q.get("price") or q.get("error"), q
+    if q.get("price"):
+        assert q["price"] > 0 and q["is_live"] and q["as_of"], q
+
+
 @pytest.mark.network
 def test_sec_client_live():
     """Hits SEC (cached after the first run). Skip with: -m 'not network'"""

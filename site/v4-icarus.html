@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>10K AI — the 10-K, taken apart</title>
+<title>Filed — the 10-K, taken apart</title>
 <meta name="description" content="Give it a ticker, get the 10-K and everything useful inside it. Every Item as its own file, the as-filed statements, ten years of financials, and a diff of this year's risks against last year's. All from SEC EDGAR.">
 <meta name="theme-color" content="#222222">
 <link rel="icon" href="assets/favicon-icarus.png" type="image/png">
@@ -569,7 +569,7 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
 <a class="skip" href="#ticker">Skip to the ticker box</a>
 
 <header class="top">
-  <span class="wordmark">10K&nbsp;AI</span>
+  <span class="wordmark">Filed</span>
   <nav class="micro">
     <a href="#output">What lands</a>
     <a href="#approach">How it works</a>
@@ -597,7 +597,7 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
 
   <div class="hero__copy">
     <h1><span class="nb">The 10-K,</span> taken apart</h1>
-    <p class="deck">Give it a ticker. Every Item comes back as its own file, the statements as filed, ten years of financials, and this year's risks diffed against last year's.</p>
+    <p class="deck">Give it a ticker. Every Item comes back as its own file, the statements as filed, ten years of financials, and this year's risks diffed against last year's — then the 10-Qs filed since roll the audited year forward to the latest quarter.</p>
 
     <form class="cta" id="run-form" autocomplete="off">
       <input id="ticker" name="ticker" type="text" placeholder="Ticker"
@@ -639,7 +639,7 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
     <article class="entry">
       <h3>The one file to open first</h3>
       <span class="file">SUMMARY.md</span>
-      <p>Company identifiers, the latest year's numbers, revenue and EPS history, the risk-diff headline, and an index of everything else.</p>
+      <p>Company identifiers, the latest year's numbers, the trailing twelve months rolled forward from the 10-Qs, revenue and EPS history, the risk-diff headline, and an index of everything else.</p>
     </article>
     <article class="entry">
       <h3>All ten Items, split out</h3>
@@ -675,7 +675,7 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
   <div class="statement">
     <div>
       <h3>No key, no quota, no cost</h3>
-      <p>Everything comes from SEC EDGAR, and nothing comes from anywhere else. A full extraction is about seventeen requests and fifteen seconds cold, then instant — filings are immutable once accepted, so the cache never expires. Even the share price is the filing's own, implied by the cover page rather than fetched from a quote feed, so nothing here moves after the filing date.</p>
+      <p>Everything comes from SEC EDGAR, bar one keyless quote call. A full extraction is about seventeen requests and fifteen seconds cold, then instant — filings are immutable once accepted, so the cache never expires. The 10-Q figures ride along in the same XBRL call the ten-year history uses, so the roll-forward costs no extra requests. The one exception is the share price, which is a live quote — keyless, uncached, and the only figure here that isn't tagged data out of a filing. It earns the exception: every other number is a fact about a period that already closed, and a market cap is a fact about right now.</p>
     </div>
     <div>
       <h3>No model touches the filing</h3>
@@ -691,7 +691,7 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
 
 <footer class="close">
   <div class="rule" role="presentation"></div>
-  <p class="name">10K AI</p>
+  <p class="name">Filed</p>
   <!-- The three plates were supplied, not sourced, so there is no attribution
        to print here yet. Do not guess one: an invented credit is worse than
        none. Fill this in before the site goes anywhere public. -->
@@ -872,14 +872,20 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
       metric('Cash + ST inv.',   usdM(L.cash_st_inv_m)),
       metric('Diluted shares',   sh(L.shares_diluted), 'weighted average'),
       metric('Membership fees',  usdM(L.membership_fee_m), L.membership_fee_m == null ? '' : 'income statement'),
-      metric('MRQ revenue',      usdM(L.mrq_revenue_m), 'fourth quarter'),
-      metric('MRQ revenue (PY)', usdM(L.mrq_revenue_prior_m), 'prior-year Q4'),
+      // The quarter is the exception in this block: it comes off the latest
+      // 10-Q, because the SEC dropped selected quarterly data in 2021 and
+      // almost no 10-K tags one any more.
+      metric('MRQ revenue',      usdM(L.mrq_revenue_m),
+             L.mrq_quarter_end ? 'quarter ended ' + esc(L.mrq_quarter_end) : 'fourth quarter'),
+      metric('MRQ revenue (PY)', usdM(L.mrq_revenue_prior_m),
+             L.mrq_growth_pct == null
+               ? (L.mrq_prior_quarter_end ? esc(L.mrq_prior_quarter_end) : 'prior-year Q4')
+               : (L.mrq_growth_pct >= 0 ? '+' : '') + L.mrq_growth_pct.toFixed(1) + '% YoY'),
     ]));
     if (L.mrq_revenue_m == null){
-      parts.push('<p class="runstat">No quarterly period is tagged in this 10-K, so the ' +
-        'most-recent-quarter rows are blank. The SEC dropped the selected-quarterly-data ' +
-        'requirement in 2021 — the quarter is in the 10-Q. Quarters filed <em>since</em> the ' +
-        'year end are read out of those 10-Qs under Trailing twelve months, below.</p>');
+      parts.push('<p class="runstat">The most-recent-quarter rows are blank: this filer tags ' +
+        'no quarterly revenue in its 10-Qs, and no fourth quarter in its 10-K either. Banks ' +
+        'are the usual case. Nothing is reconstructed to fill the gap.</p>');
     }
 
     const V = d.valuation;
@@ -897,8 +903,14 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
         metric('EV / EBITDA', x(V.ev_ebitda), V.ev_sales == null ? '' : 'EV/Sales ' + x(V.ev_sales)),
         metric('P/E', x(V.pe), V.ev_ebit == null ? '' : 'EV/EBIT ' + x(V.ev_ebit)),
       ]));
-      // The price is the filing's own, not a quote. Saying where it comes from
-      // is the difference between a number and a number you can check.
+      // Where the price came from is the difference between a number and a
+      // number you can check — and the two sources here are not equivalent.
+      if (V.price_is_live){
+        parts.push('<p class="runstat">Price is a <strong>live quote</strong>, ' +
+          esc(V.price_as_of || '') + '. It is the only figure on this page that is not tagged ' +
+          'data out of a filing, and the only one that moves between runs — everything it ' +
+          'multiplies is a fact about a period that has already closed.</p>');
+      }
       if (V.price_is_floor){
         parts.push('<p class="runstat">Price is ' + esc(V.price_source || '') +
           ', so it is a <strong>floor</strong> — affiliate-held shares are excluded, and a ' +
@@ -955,6 +967,31 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
           'the TTM column: ' + esc(T.not_tagged.join(', ')) +
           '. The annual figures are unaffected.</p>');
       }
+    }
+
+    // The stock items, off one filing on one date. Separate from the TTM block
+    // above because they are a different kind of number: those are twelve
+    // months of trading, these are a photograph. Rendered even when there is no
+    // TTM at all — a balance sheet needs no prior-year comparable.
+    const S = d.snapshot;
+    if (S){
+      parts.push('<h3>Balance sheet, as of the latest filing</h3>' + grid([
+        metric('Cash + ST inv.', usdM(S.cash_st_inv_m)),
+        metric('Total debt',     usdM(S.total_debt_m),
+               S.net_cash_m == null ? '' :
+               (S.net_cash_m >= 0 ? 'net cash ' : 'net debt ') + usdM(Math.abs(S.net_cash_m))),
+        metric('Total assets',   usdM(S.total_assets_m)),
+        metric('Inventory',      usdM(S.inventory_m)),
+        metric('Shares out.',    sh(S.cover_shares),
+               S.cover_shares_as_of ? 'cover page, ' + esc(S.cover_shares_as_of) : 'cover page'),
+        metric('Diluted shares', sh(S.shares_diluted), 'weighted average, the quarter'),
+      ]));
+      parts.push('<p class="runstat">Straight off the ' + esc(S.form || 'latest filing') +
+        ' for ' + esc(S.as_of) + (S.filed ? ', filed ' + esc(S.filed) : '') + ' — no ' +
+        'arithmetic, no roll-forward. Stock items take none: whatever the last filing states ' +
+        'is the number. The two share counts differ on purpose — the cover page is shares ' +
+        'actually outstanding weeks after the quarter closed, the diluted count is a weighted ' +
+        'average across it.</p>');
     }
 
     if (d.history && d.history.length){

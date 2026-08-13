@@ -101,6 +101,7 @@ def load_filing(out_dir):
             "price_as_of": q.get("as_of"),
             "price_source": q.get("source"),
             "price_is_floor": bool(q.get("is_floor")),
+            "price_is_live": bool(q.get("is_live")),
             "public_float_m": money(q.get("public_float")),
             "cover_shares": (v["shares"].get("cover_page") or {}).get("total"),
             "fully_diluted": v["shares"].get("fully_diluted"),
@@ -169,6 +170,29 @@ def load_filing(out_dir):
                 "ev_sales", "ev_ebit", "ev_ebitda", "pe", "fcf_yield_pct")},
         }
 
+    # The most recent quarter and the balance sheet behind it. Both read the
+    # 10-Qs and both stand on their own — a filer the TTM roll can't handle
+    # (no comparable prior-year period) still has a latest balance sheet.
+    mrq = trends.get("mrq")
+    s = trends.get("snapshot")
+    snapshot = None
+    if s:
+        sv, sh = s["values"], s["shares"]
+        snapshot = {
+            "as_of": s["as_of"],
+            "form": s["form"],
+            "filed": s["filed"],
+            "cash_st_inv_m": money(s.get("cash_and_st_investments")),
+            "total_debt_m": money(s.get("total_debt")),
+            "net_cash_m": money(s.get("net_cash")),
+            "total_assets_m": money(sv.get("total_assets")),
+            "inventory_m": money(sv.get("inventory")),
+            "total_equity_m": money(sv.get("total_equity")),
+            "cover_shares": sh.get("cover_page"),
+            "cover_shares_as_of": sh.get("cover_page_as_of"),
+            "shares_diluted": sh.get("weighted_average_diluted"),
+        }
+
     rel = out_dir.relative_to(ROOT).as_posix()
     files = []
     for p in sorted(out_dir.rglob("*")):
@@ -216,9 +240,18 @@ def load_filing(out_dir):
             "capex_m": money(at("capex", latest)),
             "membership_fee_m": money(
                 trends.get("statement_lines", {}).get("membership_fee_income")),
-            "mrq_revenue_m": money(d.get("mrq_revenue")),
-            "mrq_revenue_prior_m": money(d.get("mrq_revenue_prior")),
+            # The quarter comes off the latest 10-Q, falling back to a fourth
+            # quarter out of the 10-K itself. `d["mrq_revenue"]` is the 10-K-only
+            # figure and is blank for almost every modern filer.
+            "mrq_revenue_m": money((mrq or {}).get("revenue", d.get("mrq_revenue"))),
+            "mrq_revenue_prior_m": money(
+                (mrq or {}).get("prior_revenue", d.get("mrq_revenue_prior"))),
+            "mrq_quarter_end": (mrq or {}).get("quarter_end"),
+            "mrq_prior_quarter_end": (mrq or {}).get("prior_quarter_end"),
+            "mrq_growth_pct": (mrq or {}).get("growth_pct"),
         },
+        # Stock items as of the newest filing — no LTM arithmetic, one date.
+        "snapshot": snapshot,
         "valuation": valuation,
         "ttm": ttm,
         "cagr": derived.get("cagr", {}),
@@ -271,7 +304,7 @@ def run_extractor(ticker):
 ERROR_PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>%(code)d — 10K AI</title>
+<title>%(code)d — Filed</title>
 <meta name="theme-color" content="#222222">
 <link rel="icon" href="/assets/favicon-icarus.png" type="image/png">
 <style>
@@ -423,7 +456,7 @@ def main():
         sys.exit("site/ not found next to serve.py")
 
     srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    print("10K AI  ->  http://localhost:{}".format(args.port))
+    print("Filed  ->  http://localhost:{}".format(args.port))
     print("Ctrl-C to stop.")
     try:
         srv.serve_forever()

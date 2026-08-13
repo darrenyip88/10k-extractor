@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>10K AI — the 10-K, taken apart</title>
+<title>Filed — the 10-K, taken apart</title>
 <meta name="description" content="Give it a ticker, get the 10-K and everything useful inside it. Every Item as its own file, the as-filed statements, ten years of financials, and a diff of this year's risks against last year's. All from SEC EDGAR.">
 <link rel="icon" href="assets/favicon.png" type="image/png">
 
@@ -482,7 +482,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
     <div class="statement">
       <div>
         <h3>No key, no quota, no cost</h3>
-        <p>Everything comes from SEC EDGAR, and nothing comes from anywhere else. A full extraction is about seventeen requests and fifteen seconds cold, then instant — filings are immutable once accepted, so the cache never expires. Even the share price is the filing's own, implied by the cover page rather than fetched from a quote feed, so nothing here moves after the filing date.</p>
+        <p>Everything comes from SEC EDGAR bar one number. A full extraction is about seventeen requests and fifteen seconds cold, then instant — filings are immutable once accepted, so the cache never expires. The exception is the share price, which is a live quote and never cached: every other figure is a fact about a period that has already closed, while a market cap is a fact about right now.</p>
       </div>
       <div>
         <h3>No model touches the filing</h3>
@@ -496,7 +496,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
   </section>
 
   <footer class="close">
-    <strong>10K AI</strong>
+    <strong>Filed</strong>
     <span>Data from SEC EDGAR. Extraction only — not investment advice.</span>
   </footer>
 </div><!-- /.ground -->

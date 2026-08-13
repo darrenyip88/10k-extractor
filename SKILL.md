@@ -18,10 +18,13 @@ Useful flags: `--year 2019` for an older filing, `--all-tables` to also pull eve
 note table (segment revenue, geographic split, debt maturities, leases),
 `--refresh` to bypass the cache, `--cik N` for tickers SEC's map doesn't list,
 `--price 250` / `--shares N` to override the price or the share count (needed for
-multi-class filers like BRK), `--no-price` to skip the price entirely.
+multi-class filers like BRK), `--filing-price` to price off the cover page
+instead of a live quote, `--no-price` to skip the price entirely.
 
-Every figure comes out of the 10-K, the share price included — there is no quote
-feed anywhere in this tool.
+Every figure comes out of a filing — the 10-K, or a 10-Q for anything trailing —
+with one exception: the share price is a live quote. It is never cached, so a
+re-run that short-circuits on the cache carries the price from when it was
+written; `--refresh` re-prices.
 
 ## Then read, in this order
 
@@ -40,6 +43,8 @@ feed anywhere in this tool.
 | Multi-year trend, margins, FCF, ROE | `trends.md` |
 | Share count, market cap, EV, EBIT/EBITDA, multiples | `valuation.md` |
 | Current run-rate, not the audited year | the **Trailing twelve months** section of `SUMMARY.md` and `valuation.md` (`ttm` in the JSON twins) |
+| One block of model-ready inputs: LTM flows, latest balance sheet, live price | the **Latest data** section of `SUMMARY.md` (`ttm` / `mrq` / `snapshot` in `trends.json`) |
+| Last quarter's revenue and the same quarter a year ago | `mrq` in `trends.json` — the discrete quarter, not the year to date |
 | Lawsuits | `sections/item3_legal_proceedings.md` |
 | Accounting notes, segment detail | `sections/item8_financial_statements.md` |
 | Rates/FX/commodity exposure | `sections/item7a_market_risk.md` |
@@ -70,14 +75,16 @@ Follow the house rules in `~/Claude/Claude Code/CLAUDE.md`:
   actual shares outstanding weeks after year end, the weighted-average diluted
   count is a full-year average, and fully diluted adds options and unvested RSUs
   from the footnote. Say which one a per-share figure uses.
-- **The price is the cover page's, and it's a floor.** There is no quote feed.
-  `valuation.md` divides the cover page's aggregate market value of non-affiliate
-  common equity by shares outstanding. That excludes insider-held shares, so a
-  filer with a large insider stake prices low by roughly that percentage (Apple
-  lands within ~1% of the real close, Tesla about a fifth under), and the two
-  numbers are stamped months apart. Market cap is therefore the public float
-  restated, and every multiple inherits the same floor. Say which date the price
-  is from — it's printed — and never call it the current price.
+- **The price is live; everything it multiplies is not.** The quote carries its
+  own timestamp in `valuation.json` — say which one, and pair it with LTM
+  figures rather than the audited year when the question is about the multiple
+  today. If the feed was unreachable the run falls back to the cover page's
+  aggregate market value of non-affiliate common equity divided by shares
+  outstanding, which is a **floor**: it excludes insider-held shares, so a filer
+  with a large insider stake prices low by roughly that percentage (Apple lands
+  within ~1% of the real close, Tesla about a fifth under), and the two numbers
+  are stamped months apart. The output flags which of the two it used
+  (`is_live` vs `is_floor`). Never call a floor price the current price.
 - **A condensed section is not a paraphrase.** `summaries/` keeps whole
   sentences the company wrote and drops others; it never rewords. But it *does*
   drop sentences, so don't claim a filing is silent on something from a summary
@@ -94,5 +101,21 @@ Follow the house rules in `~/Claude/Claude Code/CLAUDE.md`:
   doesn't tag quarterly are listed in `not_tagged` and are blank in the TTM
   column only — banks typically have no quarterly revenue there. When the section
   says there is no TTM, the 10-K is the newest data and that is the answer.
+- **Flow items are LTM; stock items are a snapshot.** The **Latest data**
+  section is the block to quote when someone is building a model. Income and
+  cash-flow lines there are twelve months of trading ending at the latest
+  quarter; balance-sheet lines are one date off one filing, with no arithmetic
+  at all. Don't average a balance sheet or annualise a quarter to make them
+  match — they aren't supposed to.
+- **MRQ revenue is one quarter, not a year.** `mrq` in `trends.json` is the
+  discrete three months, taken from the 10-Q, with the same quarter a year
+  earlier beside it. `basis` says how it was arrived at: tagged directly, or
+  differenced out of two year-to-date figures, or — when the 10-K is the newest
+  filing — the year less its last 10-Q, which is the fourth quarter. Never
+  multiply it by four and call it a run-rate.
+- **Two share counts in the snapshot, and they are not interchangeable.** The
+  cover-page count is shares actually outstanding weeks after the quarter
+  closed (use it for market cap); the weighted-average diluted count spans the
+  quarter and includes award dilution (use it for per-share figures).
 - Watch for split-driven breaks in the EPS and share-count rows of `trends.md`;
   the file explains why they're there.

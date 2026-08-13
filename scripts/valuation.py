@@ -43,7 +43,7 @@ import json
 import math
 import re
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 
 # A share class more than this many times bigger than another means a
 # super-voting class (BRK.A vs BRK.B): one price across both would be nonsense.
@@ -380,6 +380,54 @@ def filing_price(companyfacts, accession, cover):
     }
 
 
+# --- the live price ------------------------------------------------------
+
+# The one thing in this project that is not a filing. Everything else here is
+# tagged data out of EDGAR and doesn't move after the filing was accepted; a
+# market cap built on a nine-month-old cover-page float does move, and wrongly.
+# Free, no key, no quota — and deliberately never cached, because a cached quote
+# is a stale number wearing a live timestamp.
+QUOTE_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{}?range=1d&interval=1d"
+QUOTE_TIMEOUT = 15
+
+
+def live_quote(ticker, timeout=QUOTE_TIMEOUT):
+    """The current share price. Never raises — a failure falls back to the filing.
+
+    Returns the same shape as `filing_price` so the two are interchangeable
+    upstream: a price with its own `source`, or None with an `error` saying why.
+    SEC writes share classes with a dash and so does Yahoo (BRK-B), so the
+    ticker needs no further translation.
+    """
+    import requests
+
+    try:
+        resp = requests.get(
+            QUOTE_URL.format(ticker),
+            headers={"User-Agent": "Darren Yip darrenyip28@gmail.com"},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        meta = resp.json()["chart"]["result"][0]["meta"]
+        price = meta["regularMarketPrice"]
+    except Exception as e:
+        return {"price": None, "error": "live quote unavailable ({}: {})".format(
+            type(e).__name__, e)}
+    if not price:
+        return {"price": None, "error": "live quote returned no price for {}".format(ticker)}
+    stamped = meta.get("regularMarketTime")
+    return {
+        "price": float(price),
+        "currency": meta.get("currency", "USD"),
+        "as_of": datetime.fromtimestamp(stamped, timezone.utc).isoformat(timespec="minutes")
+        if stamped else None,
+        "source": "live quote — {}, {}".format(
+            meta.get("fullExchangeName", "market"), meta.get("symbol", ticker)),
+        "is_live": True,
+        "exchange": meta.get("fullExchangeName"),
+    }
+
+
 # --- the bridge ----------------------------------------------------------
 
 
@@ -595,7 +643,11 @@ def build(series, derived, year, cover, awards, quote, shares_override=None,
 
 
 def _m(value):
-    return "—" if value is None else "${:,.0f}M".format(value / 1e6)
+    """Millions, accounting signs. A bank's operating cash flow is routinely
+    negative and a bare minus in a wide table reads as a hyphen."""
+    if value is None:
+        return "—"
+    return "(${:,.0f}M)".format(abs(value) / 1e6) if value < 0 else "${:,.0f}M".format(value / 1e6)
 
 
 def _sh(value):

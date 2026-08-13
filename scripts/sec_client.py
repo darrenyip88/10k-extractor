@@ -159,12 +159,13 @@ class SECClient:
         return self.get_json(FACTS_URL.format(cik=cik))
 
     @staticmethod
-    def _collect_10ks(block):
+    def _collect(block, want):
         out = []
         for i, form in enumerate(block["form"]):
-            # Exact "10-K" only. 10-K/A amendments usually restate a fragment,
-            # not the whole document, so they'd produce half-empty sections.
-            if form != "10-K":
+            # Exact form only. 10-K/A and 10-Q/A amendments usually restate a
+            # fragment, not the whole document, so they'd produce half-empty
+            # sections.
+            if form != want:
                 continue
             out.append(
                 {
@@ -178,8 +179,8 @@ class SECClient:
             )
         return out
 
-    def list_10ks(self, cik, subs=None, need=2):
-        """Return 10-K filings, newest first.
+    def list_filings(self, cik, subs=None, form="10-K", need=2):
+        """Return filings of one form, newest first.
 
         `filings.recent` holds the most recent filings of *any* type, so a heavy
         filer blows past its own 10-K history: JPMorgan's recent block has 25,613
@@ -188,14 +189,20 @@ class SECClient:
         have `need` filings (only the prior year is needed, for the risk diff).
         """
         subs = subs or self.submissions(cik)
-        out = self._collect_10ks(subs["filings"]["recent"])
+        out = self._collect(subs["filings"]["recent"], form)
 
         for archive in (subs["filings"].get("files") or [])[:MAX_OVERFLOW_FILES]:
             if len(out) >= need:
                 break
             page = self.get_json("https://data.sec.gov/submissions/{}".format(archive["name"]))
-            out += self._collect_10ks(page)
+            out += self._collect(page, form)
 
+        return sorted(out, key=lambda f: f["report_date"], reverse=True)
+
+    def list_10ks(self, cik, subs=None, need=2):
+        """The 10-Ks, newest first — with the message a filer that files none needs."""
+        subs = subs or self.submissions(cik)
+        out = self.list_filings(cik, subs, "10-K", need)
         if not out:
             forms = set(subs["filings"]["recent"]["form"])
             hint = ""
@@ -205,7 +212,7 @@ class SECClient:
                     "{} instead of a 10-K.".format("/".join(sorted(forms & FOREIGN_FORMS)))
                 )
             raise SECError("no 10-K filings found for CIK {}.{}".format(cik, hint))
-        return sorted(out, key=lambda f: f["report_date"], reverse=True)
+        return out
 
     def filing_url(self, cik, accession_plain, name):
         return ARCHIVE_URL.format(cik=cik, acc=accession_plain, name=name)
