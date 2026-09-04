@@ -14,7 +14,9 @@ cd "/Users/darren/Claude/Claude Code/10K AI" && ./run_10k.sh <TICKER>
 Free, no API key, no quota — it's all SEC EDGAR. Takes ~15 seconds cold, instant
 when cached. Output lands in `filings/<TICKER>/<fiscal-year-end>/`.
 
-Useful flags: `--year 2019` for an older filing, `--all-tables` to also pull every
+Useful flags: `--rebuild` to regenerate every output file from the cached SEC
+responses after a code change (no download, one fresh quote), `--year 2019` for
+an older filing, `--all-tables` to also pull every
 note table (segment revenue, geographic split, debt maturities, leases),
 `--refresh` to bypass the cache, `--cik N` for tickers SEC's map doesn't list,
 `--price 250` / `--shares N` to override the price or the share count (needed for
@@ -40,7 +42,10 @@ written; `--refresh` re-prices.
 | What changed in the risks this year? | `risk_diff.md` |
 | Why did results move? | `sections/item7_mdna.md` |
 | Exact statement line items, as filed | `statements/income_statement.md`, `balance_sheet.md`, `cash_flow.md` |
-| Multi-year trend, margins, FCF, ROE | `trends.md` |
+| Multi-year trend, margins, FCF, ROE, ROIC, working-capital days | `trends.md` |
+| **Anything going into a model** | `model.csv` — every metric down, fiscal years across, LTM last, whole dollars, blanks left blank. Read this instead of retyping figures out of `trends.md` |
+| A line the curated list doesn't name (goodwill, deferred revenue, a lease maturity) | `xbrl_by_year.json` — every concept this filer tagged, at each year end |
+| What an earlier year's filing implied it was worth | `history` in `valuation.json`, and the table at the foot of `valuation.md` |
 | Share count, market cap, EV, EBIT/EBITDA, multiples | `valuation.md` |
 | Current run-rate, not the audited year | the **Trailing twelve months** section of `SUMMARY.md` and `valuation.md` (`ttm` in the JSON twins) |
 | One block of model-ready inputs: LTM flows, latest balance sheet, live price | the **Latest data** section of `SUMMARY.md` (`ttm` / `mrq` / `snapshot` in `trends.json`) |
@@ -117,5 +122,28 @@ Follow the house rules in `~/Claude/Claude Code/CLAUDE.md`:
   cover-page count is shares actually outstanding weeks after the quarter
   closed (use it for market cap); the weighted-average diluted count spans the
   quarter and includes award dilution (use it for per-share figures).
+- **`model.csv` is the file to quote from when the question is quantitative.**
+  It carries the ratios a forecast needs — effective tax rate, NOPAT, invested
+  capital, ROIC, net debt / EBITDA, interest coverage, receivable / inventory /
+  payable days and the cash conversion cycle, capex and R&D and SG&A and stock
+  comp as a share of revenue, FCF conversion, per-share book value and FCF — all
+  computed by the tool, none reported by the company. Say so when quoting them.
+  Two definitions to state rather than assume: the effective tax rate is income
+  tax expense over pretax income and is blank on a loss year, and invested
+  capital is total debt + equity − cash and short-term investments.
+- **An empty cell in `model.csv` is a figure the filer never tagged, never a
+  zero.** Don't average over it or fill it. Banks legitimately have no gross
+  profit, capex, inventory or working-capital cycle, so roughly eighteen of the
+  forty-two model rows are blank for JPMorgan and that is the correct answer.
+- **Historical valuations are floors, one per year, and never live.** The
+  `history` block prices each earlier year off its own cover page — public float
+  ÷ shares on that cover — because today's quote over a 2019 share count is not
+  a 2019 market cap. Its P/E is market cap over net income rather than price
+  over EPS, deliberately: across a stock split the cover page is pre-split while
+  the ten-year EPS has been restated, and dividing one by the other prints a
+  number several times too high that looks entirely reasonable. Where a split
+  intervened, the row states the factor and the price on today's basis.
 - Watch for split-driven breaks in the EPS and share-count rows of `trends.md`;
-  the file explains why they're there.
+  the file explains why they're there. The same break runs through the share
+  price in `valuation.json`'s `history` — use `price_split_adjusted` when
+  comparing years, and `price` when quoting what that filing itself supported.

@@ -23,6 +23,7 @@ The same call also carries every 10-Q the company has filed, which is what
 recent quarter. Free — the facts are already in hand.
 """
 
+import math
 from datetime import date, timedelta
 
 # Concept name varies by filer, so each line item is a priority list: first one
@@ -74,6 +75,30 @@ DURATION_CONCEPTS = {
     "capex": ["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"],
     "buybacks": ["PaymentsForRepurchaseOfCommonStock"],
     "dividends_paid": ["PaymentsOfDividendsCommonStock", "PaymentsOfDividends"],
+    # --- the lines a model asks for that the first pass didn't carry -------
+    # Every one of these is in the same companyfacts response as the rows
+    # above, so none of them costs a request. They are here because a forecast
+    # is built out of them: you cannot get to unlevered free cash flow without
+    # a tax rate, or to a working-capital schedule without receivables and
+    # payables, or judge earnings quality without stock comp.
+    "income_tax_expense": ["IncomeTaxExpenseBenefit"],
+    "sga_expense": [
+        "SellingGeneralAndAdministrativeExpense",
+        "GeneralAndAdministrativeExpense",
+    ],
+    "selling_marketing_expense": ["SellingAndMarketingExpense"],
+    # The cash flow statement's own add-back, which is the one that belongs in
+    # a cash-flow bridge. The footnote's expense figure is the same number for
+    # most filers and a different one for a few.
+    "stock_comp": ["ShareBasedCompensation", "AllocatedShareBasedCompensationExpense"],
+    "eps_basic": ["EarningsPerShareBasic"],
+    "shares_basic": ["WeightedAverageNumberOfSharesOutstandingBasic"],
+    "dividends_per_share": [
+        "CommonStockDividendsPerShareDeclared",
+        "CommonStockDividendsPerShareCashPaid",
+    ],
+    "acquisitions": ["PaymentsToAcquireBusinessesNetOfCashAcquired"],
+    "interest_income": ["InvestmentIncomeInterest", "InterestAndDividendIncomeOperating"],
 }
 
 INSTANT_CONCEPTS = {
@@ -116,6 +141,23 @@ INSTANT_CONCEPTS = {
     "minority_interest": ["MinorityInterest"],
     "finance_lease_liability": ["FinanceLeaseLiability"],
     "operating_lease_liability": ["OperatingLeaseLiability"],
+    # --- the balance sheet a model actually schedules ----------------------
+    "current_assets": ["AssetsCurrent"],
+    "current_liabilities": ["LiabilitiesCurrent"],
+    "accounts_receivable": ["AccountsReceivableNetCurrent", "ReceivablesNetCurrent"],
+    "accounts_payable": [
+        "AccountsPayableCurrent",
+        "AccountsPayableAndAccruedLiabilitiesCurrent",
+    ],
+    "ppe_net": ["PropertyPlantAndEquipmentNet"],
+    "goodwill": ["Goodwill"],
+    "intangibles": [
+        "IntangibleAssetsNetExcludingGoodwill",
+        "FiniteLivedIntangibleAssetsNet",
+    ],
+    "deferred_revenue": ["ContractWithCustomerLiabilityCurrent", "DeferredRevenueCurrent"],
+    "retained_earnings": ["RetainedEarningsAccumulatedDeficit"],
+    "long_term_investments": ["LongTermInvestments", "MarketableSecuritiesNoncurrent"],
 }
 
 MIN_DAYS, MAX_DAYS = 340, 400  # what counts as an annual period
@@ -139,6 +181,19 @@ QUARTERLY_CONCEPTS = {"mrq_revenue": DURATION_CONCEPTS["revenue"]}
 ALTERNATE_LOOKUPS = {
     "debt_incl_current", "long_term_debt_ambiguous", "debt_current_total",
     "short_term_borrowings", "commercial_paper", "preferred_liquidation",
+}
+
+# Lines a company can legitimately not have, as opposed to lines it failed to
+# tag. Apple has no goodwill worth speaking of and Tesla pays no dividend;
+# listing those under "not tagged by this filer" is noise that buries the ones
+# that matter. They still render as a blank wherever they appear — the blank is
+# just not called out as an omission.
+OPTIONAL_LINES = {
+    "goodwill", "intangibles", "deferred_revenue", "interest_income",
+    "long_term_investments", "acquisitions", "dividends_per_share",
+    "selling_marketing_expense", "dividends_paid", "buybacks",
+    "preferred_stock", "minority_interest", "finance_lease_liability",
+    "operating_lease_liability",
 }
 
 
@@ -215,6 +270,126 @@ def instant_series(facts, concepts, fiscal_year_ends):
     )
 
 
+def _unit_name(concept_data):
+    """The unit key `_units` picked for this concept — USD, shares, USD/shares."""
+    units = concept_data.get("units", {})
+    for key in ("USD", "shares", "USD/shares"):
+        if key in units:
+            return key
+    return next(iter(units), None)
+
+
+def tagged_by_year(facts, years):
+    """Every us-gaap concept this filer tagged, valued at each fiscal year end.
+
+    The curated series above are the ~34 lines a model asks for by name. This is
+    the rest of the filing — goodwill, receivables, deferred revenue, every lease
+    and tax line, whatever this particular filer happens to tag. It is what lets
+    a search box answer a question the catalogue never anticipated, and it costs
+    no extra request: companyfacts is already in hand.
+
+    Same filters as the curated series, deliberately, so the same concept read
+    through either route is the same number: annual 10-K durations of 340-400
+    days, instants at exactly those period ends, restatements resolved by taking
+    the most recently filed row.
+    """
+    wanted = set(years)
+    out = {}
+    for concept, data in sorted(facts.items()):
+        rows = _units(data)
+        if not rows:
+            continue
+        duration = [
+            r for r in rows
+            if "start" in r and r.get("form", "").startswith("10-K")
+            and r["end"] in wanted and MIN_DAYS <= _duration_days(r) <= MAX_DAYS
+        ]
+        # No form filter on instants, matching instant_series: a year-end balance
+        # sheet is restated as the comparative column of later filings and the
+        # newest of those is the value the curated series uses.
+        instant = [r for r in rows if "start" not in r and r["end"] in wanted]
+        kept, kind = (duration, "duration") if duration else (instant, "instant")
+        if not kept:
+            continue
+        out[concept] = {
+            "unit": _unit_name(data),
+            "type": kind,
+            "values": _latest_filed(kept),
+        }
+    return out
+
+
+def filing_accessions(facts, years):
+    """-> {fiscal year end: the accession of that year's *own* 10-K}.
+
+    Earliest-filed wins, which is the opposite of the rule everywhere else in
+    this file. Everywhere else the question is "what is this figure now", and
+    the newest restatement is the answer. Here the question is "which document
+    is this", and a 10-K restates the two years before it as comparative
+    columns — so the newest row for FY2019 belongs to the FY2021 10-K. The
+    public float and share count on a cover page belong to the filing that
+    printed them, and pairing FY2019's numbers with FY2021's cover page prices
+    the wrong year.
+
+    Exact form "10-K": a 10-K/A amends a fragment and its cover page restates
+    nothing that matters here.
+    """
+    wanted = set(years)
+    best = {}
+    for data in facts.values():
+        for row in _units(data):
+            if row.get("form") != "10-K" or "start" not in row or row["end"] not in wanted:
+                continue
+            if not (MIN_DAYS <= _duration_days(row) <= MAX_DAYS) or not row.get("accn"):
+                continue
+            prev = best.get(row["end"])
+            if prev is None or row["filed"] < prev[0]:
+                best[row["end"]] = (row["filed"], row["accn"])
+    return {year: accn for year, (_, accn) in sorted(best.items())}
+
+
+# A filer can change the scale it tags a share count at partway through its own
+# history. McDonald's tags WeightedAverageNumberOfDilutedSharesOutstanding as
+# 750,100,000 through fiscal 2020 and as 716.4 from 2021 — the same figure, in
+# millions. Left alone that renders as 0.0M shares, a -100% share-count change
+# in 2021 and a +100,000% one in 2022, and every per-share figure built on it is
+# out by a factor of a million.
+#
+# The cross-check is the filer's own arithmetic: diluted EPS is net income over
+# the diluted count, so net income / EPS is what the count has to be. That is
+# also what makes this safe on a reverse split, where the count really does fall
+# by a large factor — EPS moves with it, the implied count moves too, and
+# nothing is rescaled. Only a units error puts a power of ten between them.
+SCALE_BREAK = 100      # 100x inside one year is not a real move; 1000x never is
+
+
+def _rescale_shares(series):
+    """Put the diluted share count on one scale. -> {year: factor applied}."""
+    entry = series.get("shares_diluted") or {}
+    values = entry.get("values") or {}
+    income = series.get("net_income", {}).get("values", {})
+    per_share = series.get("eps_diluted", {}).get("values", {})
+    applied = {}
+    for year, count in list(values.items()):
+        ni, eps = income.get(year), per_share.get(year)
+        if not count or not ni or not eps:
+            continue
+        implied = ni / eps
+        ratio = implied / count
+        if ratio < SCALE_BREAK:
+            continue
+        factor = 10 ** round(math.log10(ratio))
+        # Only a clean power of ten is a units error. Anything else is data this
+        # routine doesn't understand, and leaving it alone is the honest answer.
+        if abs(implied / (count * factor) - 1) > 0.05:
+            continue
+        values[year] = count * factor
+        applied[year] = factor
+    if applied:
+        entry["rescaled"] = dict(sorted(applied.items()))
+    return applied
+
+
 def _pct(new, old):
     if new is None or old is None or old == 0:
         return None
@@ -253,9 +428,14 @@ def build(companyfacts, max_years=10, as_of=None, with_ttm=True):
 
     for name, concepts in DURATION_CONCEPTS.items():
         used, values = duration_series(facts, concepts)
-        if not used and name not in ALTERNATE_LOOKUPS:
+        if not used and name not in ALTERNATE_LOOKUPS | OPTIONAL_LINES:
             missing.append({"metric": name, "tried": concepts})
         series[name] = {"concepts": used, "values": values}
+
+    # Before anything derived is computed off them: a share count tagged in
+    # millions for some years and raw for others makes every ratio touching it
+    # wrong, and the fix has to land before derive() reads the series.
+    _rescale_shares(series)
 
     # Fiscal year ends come from the revenue series (or whatever duration
     # series is longest) — these are the dates the balance sheet is stamped at.
@@ -264,7 +444,7 @@ def build(companyfacts, max_years=10, as_of=None, with_ttm=True):
 
     for name, concepts in INSTANT_CONCEPTS.items():
         used, values = instant_series(facts, concepts, fiscal_year_ends)
-        if not used and name not in ALTERNATE_LOOKUPS:
+        if not used and name not in ALTERNATE_LOOKUPS | OPTIONAL_LINES:
             missing.append({"metric": name, "tried": concepts})
         series[name] = {"concepts": used, "values": values}
 
@@ -366,11 +546,95 @@ def _total_debt(val, year):
     return None, None
 
 
+def _days(numerator, denominator):
+    """A balance divided by a year of flow, in days. None when either is absent."""
+    if numerator is None or not denominator:
+        return None
+    return round(numerator / denominator * 365, 1)
+
+
+def _model_ratios(val, year, d):
+    """The ratios a forecast is actually built out of.
+
+    Everything here is arithmetic on rows already above it, and every one of
+    them is a line a model needs and would otherwise be worked out by hand off
+    a printed statement:
+
+      - **Effective tax rate** is the gate to unlevered free cash flow. It is
+        computed only on a positive pretax figure: tax over a loss is a rate
+        with no forecasting meaning, and printing one invites it into a model.
+      - **Invested capital** here is debt + equity − cash and short-term
+        investments, which is the operating-capital reading. Other definitions
+        exist; this one is stated wherever the number is shown so it can be
+        recomputed rather than guessed at.
+      - **The days ratios** turn the balance sheet into a working-capital
+        schedule. Receivable days run on revenue, inventory and payable days on
+        cost of revenue — a filer with no cost line (a bank) gets blanks rather
+        than days computed off the wrong denominator.
+    """
+    rev, ni = val("revenue", year), val("net_income", year)
+    ebit, ebitda = d.get("ebit"), d.get("ebitda")
+    pretax, tax = val("pretax_income", year), val("income_tax_expense", year)
+    cogs = val("cost_of_revenue", year)
+    fcf, equity = d.get("free_cash_flow"), val("total_equity", year)
+    shares = val("shares_diluted", year)
+    debt, liquid = d.get("total_debt"), d.get("cash_and_st_investments")
+    net_cash = d.get("net_cash")
+    cur_a, cur_l = val("current_assets", year), val("current_liabilities", year)
+    divs, buys = val("dividends_paid", year), val("buybacks", year)
+
+    tax_rate = _ratio(tax, pretax) if pretax and pretax > 0 and tax is not None else None
+    nopat = ebit * (1 - tax_rate / 100) if ebit is not None and tax_rate is not None else None
+    invested = _add(debt, equity, -liquid if liquid is not None else None) \
+        if equity is not None else None
+    working_capital = (cur_a - cur_l) if cur_a is not None and cur_l is not None else None
+    returned = _add(divs, buys)
+
+    dso, dio = _days(val("accounts_receivable", year), rev), _days(val("inventory", year), cogs)
+    dpo = _days(val("accounts_payable", year), cogs)
+
+    return {
+        "effective_tax_rate_pct": tax_rate,
+        "nopat": nopat,
+        "invested_capital": invested,
+        "invested_capital_basis": "total debt + total equity − cash and short-term investments"
+        if invested is not None else None,
+        "roic_pct": _ratio(nopat, invested),
+        "asset_turnover": _ratio(rev, val("total_assets", year), pct=False),
+        "current_ratio": _ratio(cur_a, cur_l, pct=False),
+        "working_capital": working_capital,
+        "net_debt_to_ebitda": _ratio(-net_cash, ebitda, pct=False)
+        if net_cash is not None and ebitda else None,
+        "interest_coverage": _ratio(ebit, val("interest_expense", year), pct=False),
+        "receivable_days": dso,
+        "inventory_days": dio,
+        "payable_days": dpo,
+        "cash_conversion_days": round(dso + dio - dpo, 1)
+        if None not in (dso, dio, dpo) else None,
+        "capex_pct_revenue": _ratio(val("capex", year), rev),
+        "rnd_pct_revenue": _ratio(val("rnd_expense", year), rev),
+        "sga_pct_revenue": _ratio(val("sga_expense", year), rev),
+        "stock_comp_pct_revenue": _ratio(val("stock_comp", year), rev),
+        # Cash earnings against accounting earnings. Persistently under 100%
+        # is the classic tell that profit is not turning into cash.
+        "fcf_conversion_pct": _ratio(fcf, ni),
+        "fcf_per_share": _ratio(fcf, shares, pct=False),
+        "book_value_per_share": _ratio(equity, shares, pct=False),
+        "revenue_per_share": _ratio(rev, shares, pct=False),
+        "dividend_payout_pct": _ratio(divs, ni),
+        "shareholder_returns": returned,
+        "shareholder_returns_pct_fcf": _ratio(returned, fcf),
+    }
+
+
 def derive(series, years):
     """Ratios computed from the tagged values above. Every one of these is
     calculated here, not reported by the company."""
     def val(name, year):
-        return series[name]["values"].get(year)
+        # .get on both levels: derive() is also handed the synthetic one-period
+        # dicts that ttm() and snapshot() build, and a line neither of those
+        # carries must read as "not there", not raise.
+        return series.get(name, {}).get("values", {}).get(year)
 
     out = {}
     for i, year in enumerate(years):
@@ -439,6 +703,7 @@ def derive(series, years):
             "mrq_revenue": val("mrq_revenue", year),
             "mrq_revenue_prior": val("mrq_revenue", prev) if prev else None,
         }
+        out[year].update(_model_ratios(val, year, out[year]))
 
     out["cagr"] = {
         "revenue_3y_pct": _cagr(series["revenue"]["values"], 3),
@@ -475,6 +740,11 @@ TTM_METRICS = [
     "revenue", "cost_of_revenue", "gross_profit", "rnd_expense", "operating_income",
     "net_income", "eps_diluted", "operating_cash_flow", "capex", "d_and_a",
     "pretax_income", "interest_expense", "buybacks", "dividends_paid",
+    # Same rule as the rest: a flow, tagged cumulatively every quarter, so the
+    # year-to-date subtraction works on it unchanged. Per-share amounts are
+    # summed across periods, which is the standard TTM convention.
+    "income_tax_expense", "sga_expense", "selling_marketing_expense", "stock_comp",
+    "eps_basic", "dividends_per_share", "acquisitions", "interest_income",
 ]
 
 # The anchor exists only to establish *which two periods* are being
@@ -955,10 +1225,17 @@ MILLIONS = {
     "interest_expense", "preferred_stock", "preferred_liquidation", "minority_interest",
     "finance_lease_liability", "operating_lease_liability",
 }
-MILLIONS |= {"mrq_revenue"}
+MILLIONS |= {"mrq_revenue", "income_tax_expense", "sga_expense",
+             "selling_marketing_expense", "stock_comp", "acquisitions", "interest_income",
+             "current_assets", "current_liabilities", "accounts_receivable",
+             "accounts_payable", "ppe_net", "goodwill", "intangibles",
+             "deferred_revenue", "retained_earnings", "long_term_investments"}
+PER_SHARE = {"eps_diluted", "eps_basic", "dividends_per_share"}
 DERIVED_MILLIONS = {"free_cash_flow", "ebit", "ebitda", "total_debt", "preferred",
                     "minority_interest", "net_cash", "cash_and_st_investments",
-                    "mrq_revenue", "mrq_revenue_prior"}
+                    "mrq_revenue", "mrq_revenue_prior",
+                    "nopat", "invested_capital", "working_capital", "shareholder_returns"}
+DERIVED_PER_SHARE = {"fcf_per_share", "book_value_per_share", "revenue_per_share"}
 ROW_LABELS = [
     ("revenue", "Revenue"), ("mrq_revenue", "MRQ revenue (Q4)"),
     ("gross_profit", "Gross profit"),
@@ -973,6 +1250,22 @@ ROW_LABELS = [
     ("minority_interest", "Minority interest"),
     ("operating_lease_liability", "Operating lease liabilities"),
     ("buybacks", "Buybacks"), ("dividends_paid", "Dividends paid"),
+    # --- the model lines --------------------------------------------------
+    ("sga_expense", "SG&A"), ("selling_marketing_expense", "Selling & marketing"),
+    ("rnd_expense", "R&D"), ("stock_comp", "Stock-based compensation"),
+    ("income_tax_expense", "Income tax expense"),
+    ("interest_income", "Interest income"),
+    ("eps_basic", "EPS (basic)"), ("shares_basic", "Basic shares"),
+    ("dividends_per_share", "Dividends per share"),
+    ("acquisitions", "Acquisitions"),
+    ("current_assets", "Current assets"), ("current_liabilities", "Current liabilities"),
+    ("accounts_receivable", "Accounts receivable"),
+    ("accounts_payable", "Accounts payable"),
+    ("ppe_net", "PP&E, net"), ("goodwill", "Goodwill"), ("intangibles", "Intangibles"),
+    ("deferred_revenue", "Deferred revenue"),
+    ("retained_earnings", "Retained earnings"),
+    ("long_term_investments", "Long-term investments"),
+    ("total_liabilities", "Total liabilities"),
 ]
 DERIVED_LABELS = [
     ("revenue_growth_pct", "Revenue growth %"), ("eps_growth_pct", "EPS growth %"),
@@ -983,6 +1276,24 @@ DERIVED_LABELS = [
     ("total_debt", "Total debt"), ("cash_and_st_investments", "Cash + ST investments"),
     ("net_cash", "Net cash / (net debt)"),
     ("debt_to_equity", "Debt / equity"), ("shares_change_pct", "Share count change %"),
+    # --- what a forecast is built out of ----------------------------------
+    ("effective_tax_rate_pct", "Effective tax rate %"),
+    ("nopat", "NOPAT"), ("invested_capital", "Invested capital"), ("roic_pct", "ROIC %"),
+    ("asset_turnover", "Asset turnover"), ("current_ratio", "Current ratio"),
+    ("working_capital", "Working capital"),
+    ("net_debt_to_ebitda", "Net debt / EBITDA"),
+    ("interest_coverage", "Interest coverage (EBIT / interest)"),
+    ("receivable_days", "Receivable days"), ("inventory_days", "Inventory days"),
+    ("payable_days", "Payable days"), ("cash_conversion_days", "Cash conversion cycle, days"),
+    ("capex_pct_revenue", "Capex % of revenue"), ("rnd_pct_revenue", "R&D % of revenue"),
+    ("sga_pct_revenue", "SG&A % of revenue"),
+    ("stock_comp_pct_revenue", "Stock comp % of revenue"),
+    ("fcf_conversion_pct", "FCF conversion % (FCF / net income)"),
+    ("fcf_per_share", "FCF per share"), ("book_value_per_share", "Book value per share"),
+    ("revenue_per_share", "Revenue per share"),
+    ("dividend_payout_pct", "Dividend payout %"),
+    ("shareholder_returns", "Dividends + buybacks"),
+    ("shareholder_returns_pct_fcf", "Dividends + buybacks, % of FCF"),
 ]
 
 
@@ -1023,13 +1334,26 @@ def to_markdown(data, company):
         entry = data["series"].get(key, {})
         if not entry.get("concepts"):
             continue
-        kind = "millions" if key in MILLIONS else ("decimal" if key == "eps_diluted" else "whole")
+        kind = "millions" if key in MILLIONS else ("decimal" if key in PER_SHARE else "whole")
         cells = [_fmt(entry["values"].get(y), kind) for y in years]
         lines.append("| {} | {} |".format(label, " | ".join(cells)))
 
+    rescaled = (data["series"].get("shares_diluted") or {}).get("rescaled")
+    if rescaled:
+        lines += [
+            "",
+            "> **Diluted share count, {}:** this filer tags those years at a different scale "
+            "from the rest of its history (a factor of {:,.0f}). The row above is on one scale, "
+            "because net income divided by diluted EPS says that is what the count is — nothing "
+            "real moves a share count by that much in a year. No other row is touched.".format(
+                ", ".join(rescaled), max(rescaled.values())),
+        ]
+
     lines += ["", "## Derived (computed here, not reported)", "", head, rule]
     for key, label in DERIVED_LABELS:
-        kind = "millions" if key in DERIVED_MILLIONS else ("pct" if key.endswith("_pct") else "decimal")
+        kind = ("millions" if key in DERIVED_MILLIONS
+                else "decimal" if key in DERIVED_PER_SHARE
+                else "pct" if "_pct" in key or key.endswith("_days") else "decimal")
         cells = [_fmt(data["derived"].get(y, {}).get(key), kind) for y in years]
         lines.append("| {} | {} |".format(label, " | ".join(cells)))
 
@@ -1054,6 +1378,65 @@ def to_markdown(data, company):
                 m["metric"], ", ".join(m["tried"]),
                 ". " + m["note"] if m.get("note") else ""))
     return "\n".join(lines) + "\n"
+
+
+def to_csv(data, ticker="", company=""):
+    """The whole history as one spreadsheet — years across, metrics down.
+
+    The markdown twin is for reading and this is for pasting: raw numbers in
+    whole dollars, no thousands separators, no currency symbols, no em dashes.
+    A blank cell is a blank cell, which is what a spreadsheet reads as "no
+    value" — writing 0 there would be a number the filer never reported, and
+    every average computed over it afterwards would be wrong.
+
+    The last column is the trailing twelve months where there is one, so the
+    sheet opens with the audited history and the current run-rate side by side.
+    """
+    import csv as _csv
+    import io as _io
+
+    years = data["fiscal_year_ends"]
+    t = data.get("ttm") or {}
+    snap = data.get("snapshot") or {}
+    ltm_flows, ltm_stocks = t.get("values") or {}, (snap.get("values") or {})
+    ltm_derived = t.get("derived") or {}
+    has_ltm = bool(t or snap)
+    ltm_header = "LTM to {}".format(t.get("quarter_end") or snap.get("as_of") or "")
+
+    buf = _io.StringIO()
+    w = _csv.writer(buf, lineterminator="\n")
+    w.writerow(["# {} ({}) — {} fiscal years from SEC XBRL, whole dollars, "
+                "as filed".format(company or "company", ticker, len(years))])
+    w.writerow(["# Flow lines in the LTM column are twelve months to the quarter; stock lines "
+                "are that one filing's balance sheet. An empty cell is a figure the filer never "
+                "tagged, never a zero."])
+    w.writerow(["Metric", "Section", "Source"] + years + ([ltm_header] if has_ltm else []))
+
+    def cell(v):
+        return "" if v is None else v
+
+    for key, label in ROW_LABELS:
+        entry = data["series"].get(key, {})
+        if not entry.get("concepts"):
+            continue
+        latest = ltm_flows.get(key) if key in DURATION_CONCEPTS else ltm_stocks.get(key)
+        w.writerow([label, "as reported", ", ".join(entry["concepts"])] +
+                   [cell(entry["values"].get(y)) for y in years] +
+                   ([cell(latest)] if has_ltm else []))
+
+    for key, label in DERIVED_LABELS:
+        w.writerow([label, "computed here", ""] +
+                   [cell(data["derived"].get(y, {}).get(key)) for y in years] +
+                   ([cell(ltm_derived.get(key))] if has_ltm else []))
+
+    cagr = data["derived"].get("cagr", {})
+    for key, label in [("revenue_3y_pct", "Revenue 3-yr CAGR %"),
+                       ("revenue_5y_pct", "Revenue 5-yr CAGR %"),
+                       ("net_income_5y_pct", "Net income 5-yr CAGR %"),
+                       ("eps_5y_pct", "EPS 5-yr CAGR %")]:
+        w.writerow([label, "computed here", ""] + [""] * (len(years) - 1) +
+                   [cell(cagr.get(key))] + ([""] if has_ltm else []))
+    return buf.getvalue()
 
 
 def demo():
@@ -1389,8 +1772,94 @@ def demo():
     assert (date.fromisoformat("2025-09-27") - date.fromisoformat("2024-12-28")).days \
         < SNAPSHOT_MAX_GAP_DAYS
 
+    # --- a share count whose scale changes partway through ----------------
+    # McDonald's shape: whole shares through 2020, millions from 2021. Net
+    # income over diluted EPS is what settles which of the two is wrong.
+    sc = {"facts": {"us-gaap": {}}}
+    scg = sc["facts"]["us-gaap"]
+    scg.update(dur("Revenues", {"2020-12-31": 19e9, "2021-12-31": 23e9}))
+    scg.update(dur("NetIncomeLoss", {"2020-12-31": 4730.5e6, "2021-12-31": 7545.2e6}))
+    scg.update(dur("EarningsPerShareDiluted", {"2020-12-31": 6.31, "2021-12-31": 10.04}))
+    scg.update(dur("WeightedAverageNumberOfDilutedSharesOutstanding",
+                   {"2020-12-31": 750.1e6, "2021-12-31": 751.8}))
+    sb = build(sc)
+    sv = sb["series"]["shares_diluted"]["values"]
+    assert sv["2020-12-31"] == 750.1e6, sv                      # already whole shares
+    assert abs(sv["2021-12-31"] - 751.8e6) < 1, sv              # 751.8 was millions
+    assert sb["series"]["shares_diluted"]["rescaled"] == {"2021-12-31": 1e6}, \
+        sb["series"]["shares_diluted"].get("rescaled")
+    # The ratio that read -100% before is a real buyback figure now.
+    assert sb["derived"]["2021-12-31"]["shares_change_pct"] == 0.2, \
+        sb["derived"]["2021-12-31"]["shares_change_pct"]
+    assert "different scale" in to_markdown(sb, "Scale Co")
+
+    # A real reverse split must survive untouched: the count falls hard, but EPS
+    # rises by the same factor, so the implied count falls with it.
+    rs = {"facts": {"us-gaap": {}}}
+    rsg = rs["facts"]["us-gaap"]
+    rsg.update(dur("Revenues", {"2020-12-31": 1e9, "2021-12-31": 1.1e9}))
+    rsg.update(dur("NetIncomeLoss", {"2020-12-31": 100e6, "2021-12-31": 110e6}))
+    rsg.update(dur("EarningsPerShareDiluted", {"2020-12-31": 0.10, "2021-12-31": 11.0}))
+    rsg.update(dur("WeightedAverageNumberOfDilutedSharesOutstanding",
+                   {"2020-12-31": 1e9, "2021-12-31": 10e6}))
+    rb = build(rs)
+    assert rb["series"]["shares_diluted"]["values"]["2021-12-31"] == 10e6, "erased a split"
+    assert "rescaled" not in rb["series"]["shares_diluted"]
+
+    # --- every concept the filer tagged, not only the curated ones ---------
+    scg["Goodwill"] = {"units": {"USD": [
+        {"end": "2021-12-31", "val": 2.8e9, "form": "10-K", "filed": "2022-02-01"},
+        {"end": "2021-06-30", "val": 9e9, "form": "10-Q", "filed": "2021-07-01"}]}}
+    every = tagged_by_year(scg, sb["fiscal_year_ends"])
+    assert every["Goodwill"]["type"] == "instant", every["Goodwill"]
+    # the quarter-end instant is not a fiscal year end, so it never appears
+    assert every["Goodwill"]["values"] == {"2021-12-31": 2.8e9}, every["Goodwill"]
+    assert every["Revenues"]["type"] == "duration" and every["Revenues"]["unit"] == "USD"
+    scg["NothingAtAYearEnd"] = {"units": {"USD": [
+        {"end": "2019-06-30", "val": 1.0, "form": "10-K", "filed": "2019-07-01"}]}}
+    assert "NothingAtAYearEnd" not in tagged_by_year(scg, sb["fiscal_year_ends"])
+
+    # --- which filing a year belongs to ------------------------------------
+    # The same year appears in three consecutive 10-Ks. Only the first is that
+    # year's own filing, and only its cover page carries that year's float.
+    restated = {"Revenues": {"units": {"USD": [
+        {"start": "2023-01-01", "end": "2023-12-31", "val": 100e6, "form": "10-K",
+         "filed": "2024-02-01", "accn": "fy2023"},
+        {"start": "2023-01-01", "end": "2023-12-31", "val": 101e6, "form": "10-K",
+         "filed": "2025-02-01", "accn": "fy2024"},
+        {"start": "2023-01-01", "end": "2023-12-31", "val": 99e6, "form": "10-K/A",
+         "filed": "2024-03-01", "accn": "amendment"},
+    ]}}}
+    assert filing_accessions(restated, ["2023-12-31"]) == {"2023-12-31": "fy2023"}
+    assert filing_accessions(restated, ["2020-12-31"]) == {}
+
+    # --- the spreadsheet ---------------------------------------------------
+    csv_text = to_csv(build(tf), "TEST", "Test Co")
+    header = csv_text.splitlines()[2].split(",")
+    assert header[:3] == ["Metric", "Section", "Source"], header[:3]
+    assert header[3] == "2023-12-30" and "LTM to 2025-09-27" in header[-1], header
+    rev = [ln for ln in csv_text.splitlines() if ln.startswith("Revenue,")][0].split(",")
+    assert rev[3] == "800000000.0" and rev[4] == "1000000000.0", rev
+    assert rev[5] == "1070000000.0", "the LTM column must carry the roll-forward"
+    # A figure the filer never tagged is an empty cell, not a zero — a zero
+    # would average into every forecast built on the column.
+    gross = [ln for ln in csv_text.splitlines() if ln.startswith("Gross margin %,")][0]
+    assert gross.endswith(",,,"), gross
+    # Paste-ready, checked on the value cells only: a spreadsheet reads "$1,234"
+    # and "—" as text, and one text cell turns a whole column into text. Row
+    # labels are prose and may say "%" all they like.
+    import csv as _csv_check
+    import io as _io_check
+    values = [c for row in _csv_check.reader(_io_check.StringIO(csv_text))
+              if len(row) > 3 and not row[0].startswith("#")
+              for c in row[3:]]
+    assert not any(c in v for v in values for c in "—$%,"), \
+        [v for v in values if any(c in v for c in "—$%,")][:3]
+    assert "" in values, "a missing figure must be an empty cell"
+
     print("ok: trends — duration/instant split, restatement pick, debt shapes, "
-          "EBIT/EBITDA, TTM roll-forward, MRQ, balance-sheet snapshot")
+          "EBIT/EBITDA, TTM roll-forward, MRQ, balance-sheet snapshot, share-count "
+          "scale breaks, every tagged concept, per-year accessions")
 
 
 if __name__ == "__main__":

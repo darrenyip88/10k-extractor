@@ -21,8 +21,8 @@ Stdlib only. No Flask, no new dependencies.
 | Route | Does |
 |---|---|
 | `GET /` | serves `v4-icarus.html` |
-| `POST /api/extract` | `{"ticker":"AAPL"}` → runs `scripts/extract_10k.py`, returns the parsed filing as JSON |
-| `GET /api/cached` | tickers already sitting in `filings/` |
+| `POST /api/extract` | `{"ticker":"AAPL"}` → runs `scripts/extract_10k.py`, returns the parsed filing as JSON. `"year": 2019` pulls that fiscal year instead; `"refresh": true` rebuilds from the cache and re-prices |
+| `GET /api/cached` | tickers already sitting in `filings/`, with **every** period each has, not just the newest |
 | any 404 | a `#222222` error page, not stdlib's white one |
 | `GET /filings/...` | the extracted files themselves, so the file list on the page is clickable |
 
@@ -66,9 +66,58 @@ a single sentence arrives split around every superscript ®. The page rejoins
 them with the same rule the extractor uses: a line opening lowercase or with
 punctuation belongs to the line above.
 
+## Year tabs
+
+One tab per fiscal year, oldest to newest, left to right — the direction a
+financial statement reads, and the same direction the search table's columns
+run. The newest tab is the 10-K plus every 10-Q filed since; every earlier tab
+is that year's 10-K alone.
+
+Everything on a historical tab comes out of the companyfacts call the run
+already made, so switching years costs **no SEC request at all**. What XBRL
+cannot give you is the document, so each historical tab ends with a button that
+pulls that year's actual filing — the sections, the risk diff, the as-filed
+statements — through the same `--year` path the CLI uses.
+
+Historical tabs are priced off their own cover page: public float ÷ shares
+outstanding, the floor the tool has always fallen back to, one year at a time.
+Never a live quote — today's price over a 2019 share count is not a 2019 market
+cap. Where a stock split sits between then and now, the tab says so and gives
+the price on both bases.
+
+## Find a metric
+
+One search box over three tiers, ranked in that order: the ~96 named figures and
+their aliases, every line of the as-filed statements, and every remaining XBRL
+concept the filer tagged (340 for Apple, 597 for JPMorgan). That third tier is
+what makes a question nobody anticipated answerable — goodwill, deferred
+revenue, a lease maturity. Type "total debt" and get the computed row plus the
+statement lines behind it, across every year at once. `/` focuses the box.
+
+**Model inputs** is a preset, not a category: 42 rows in the order a sheet is
+laid out, from revenue down to invested capital, including the tax rate, the
+working-capital days and the ROIC denominator.
+
+**Read as** switches the whole table between values, common-sized against
+revenue, and year-over-year change. A margin changes in *points*, not by a
+percentage — the change in a rate is a difference — and common-sizing is offered
+only on raw-dollar rows, since an as-filed row is in whatever scale the filing
+rendered it at. **Units** switches $M / $B / raw. **+ CAGR** adds a compound
+growth column, blank on any row that is already a rate.
+
+**Copy as TSV** puts whatever is on screen on the clipboard as tab-separated
+raw numbers, which is what a spreadsheet pastes into cells — deliberately not
+the formatted strings, because one "$416,161M" in a column turns the whole
+column into text and every formula over it fails silently. **Download CSV**
+writes the same thing to a file. `model.csv` in the filing directory is every
+metric and every year, written on each run and served with a
+`Content-Disposition` so it saves rather than opening as a wall of commas.
+
 ## Deep links
 
 `/?t=NVDA` pulls that filing on load, so a result is a shareable link.
+`&fy=2019` opens on that year's tab; `&y=2019` pulls that year's *filing*, which
+is a different thing — the tab is XBRL, the pull is the document.
 
 ## The pick list is the cache
 

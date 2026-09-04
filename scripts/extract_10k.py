@@ -674,6 +674,9 @@ def summary_markdown(meta, data, secs, files, summaries, risk_heads, diff, stmt_
     for name in stmt_names:
         lines.append("| `statements/{}.md` | As-filed statement (`.json` alongside) |".format(name))
     lines.append("| `trends.md` | {}-year financial history and ratios |".format(len(years)))
+    lines.append("| `xbrl_by_year.json` | Every concept this filer tagged, at each year end |")
+    lines.append("| `model.csv` | The whole history as one spreadsheet — years across, "
+                 "raw dollars, blanks left blank |")
     lines.append("| `valuation.md` | Share count, market cap, EV bridge, multiples (`.json` alongside) |")
     lines.append("| `risk_headings.md` | Index of every risk factor headline |")
     if diff:
@@ -707,7 +710,7 @@ def run(args):
         filing = filings[0]
 
     out_dir = Path(args.out or DEFAULT_OUT) / ticker / filing["report_date"]
-    if (out_dir / "SUMMARY.md").exists() and not args.refresh:
+    if (out_dir / "SUMMARY.md").exists() and not args.refresh and not args.rebuild:
         print("Already extracted: {}".format(out_dir))
         # Filings never change, so re-reading them buys nothing — but the share
         # price in there was live when it was written and isn't now.
@@ -808,6 +811,20 @@ def run(args):
             client, cik, subs, quarter, fee, filing["report_date"])
     write(out_dir / "trends.json", json.dumps(data, indent=2))
     write(out_dir / "trends.md", trends.to_markdown(data, subs["name"]))
+    # Everything else this filer tagged, beyond the ~34 curated lines. Free —
+    # it is the same companyfacts response, read a second way — and it is what
+    # makes a search for a line nobody anticipated (goodwill, deferred revenue,
+    # a lease maturity) answerable at all.
+    every = trends.tagged_by_year(
+        facts.get("facts", {}).get("us-gaap", {}), data["fiscal_year_ends"])
+    write(out_dir / "xbrl_by_year.json", json.dumps(
+        {"fiscal_year_ends": data["fiscal_year_ends"], "concepts": every}, indent=2))
+    print("  every tagged concept: {} across {} years".format(
+        len(every), len(data["fiscal_year_ends"])))
+    # The same history as one spreadsheet. Written here rather than left to the
+    # reader because the JSON is nested three deep and the markdown is full of
+    # dollar signs and em dashes — neither pastes into a model without work.
+    write(out_dir / "model.csv", trends.to_csv(data, ticker, subs["name"]))
     print("  trends: {} fiscal years, {} metrics not tagged".format(
         len(data["fiscal_year_ends"]), len(data["missing"])))
     if data.get("ttm"):
@@ -851,6 +868,13 @@ def run(args):
         cover, awards, quote, shares_override=args.shares,
         ttm=data.get("ttm"), companyfacts=facts,
     )
+    # Each earlier year priced off its own cover page. No extra request, and no
+    # live quote: today's price over a 2019 share count is not a 2019 market cap.
+    val["history"] = valuation.history(
+        facts, data["series"], data["derived"], data["fiscal_year_ends"])
+    priced = sum(1 for r in val["history"].values() if r["price"] is not None)
+    print("    implied valuation for {} of {} earlier years (cover-page floors)".format(
+        priced, len(val["history"])))
     write(out_dir / "valuation.json", json.dumps(val, indent=2))
     write(out_dir / "valuation.md", valuation.to_markdown(val, subs["name"], ticker))
     print("    shares: cover {}, fully diluted {}".format(
@@ -926,6 +950,10 @@ def main():
                         "revenue and the latest balance-sheet snapshot, all three of which read "
                         "the 10-Qs")
     p.add_argument("--refresh", action="store_true", help="ignore the cache and re-download")
+    p.add_argument("--rebuild", action="store_true",
+                   help="regenerate every output file from the cached SEC responses — no "
+                        "re-download, one fresh quote. This is the flag for 'the code changed', "
+                        "where --refresh is for 'the data might have'")
     p.add_argument("--out", help="output directory (default: ../filings)")
     args = p.parse_args()
 

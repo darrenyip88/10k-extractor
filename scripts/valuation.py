@@ -45,6 +45,8 @@ import re
 import sys
 from datetime import date, datetime, timezone
 
+import trends
+
 # A share class more than this many times bigger than another means a
 # super-voting class (BRK.A vs BRK.B): one price across both would be nonsense.
 CLASS_GAP_LIMIT = 20
@@ -351,10 +353,18 @@ def filing_price(companyfacts, accession, cover):
     pf = public_float(companyfacts, accession)
     shares = (cover or {}).get("total")
     if not pf or not shares:
-        return {
-            "price": None,
-            "error": "the cover page's public float or share count isn't tagged in this filing",
-        }
+        # Two different absences, and they say different things about the filer.
+        # A multi-class filer tags its share count per class, and the
+        # companyfacts API carries undimensioned facts only — the number exists,
+        # the API just doesn't serve it.
+        why = []
+        if not pf:
+            why.append("no aggregate public float is tagged in this filing")
+        if not shares:
+            why.append("no undimensioned cover-page share count is available (a multi-class "
+                       "filer tags one per class, and companyfacts carries undimensioned "
+                       "facts only)")
+        return {"price": None, "error": " and ".join(why)}
     # Same guard the market cap uses, for the same reason one step earlier: the
     # float is one number across both classes, so dividing it by A plus B prices
     # BRK.B at $649 when it trades near $485. A wrong price is worse than none.
@@ -524,6 +534,131 @@ def ttm_block(ttm, companyfacts, price, shares_for_cap, awards):
     }
 
 
+# A stock split puts the two halves of a per-share ratio on different bases.
+# It is the one thing that breaks a historical valuation, and it breaks it
+# silently: Apple's FY2019 cover page states 4,443,265,000 shares and an implied
+# $196.86, while the FY2019 EPS in the ten-year series is $2.97 — restated for
+# the 4-for-1 split of August 2020. Dividing one by the other prints a P/E of 66
+# against a real 16.6, and nothing about the number looks wrong.
+#
+# Dollar figures are immune: the float, the market cap, EBITDA and every EV
+# multiple mean the same thing before and after a split. So the fix is to build
+# the one affected ratio out of dollars — market cap over net income — and to
+# state the split factor beside the as-filed price rather than quietly adjusting
+# it. The factor is the year's diluted share count as it stands now over the
+# same count as that year's own filing stated it: same concept, same period, so
+# the ratio is the split and nothing else.
+SPLIT_MIN = 1.5   # below this it is buybacks and issuance, not a split
+
+
+def _as_originally_filed(facts, concepts, year, accession):
+    """A concept's annual value for `year` as that year's *own* filing stated it."""
+    for concept in concepts:
+        for row in trends._units(facts.get(concept, {})):
+            if (row.get("accn") == accession and row.get("end") == year
+                    and "start" in row
+                    and trends.MIN_DAYS <= trends._duration_days(row) <= trends.MAX_DAYS):
+                return row["val"]
+    return None
+
+
+def split_since(facts, series, year, accession):
+    """-> the split factor between `year`'s filing and today, or None.
+
+    Above 1 means the count grew (a forward split), below 1 a reverse split.
+    """
+    original = _as_originally_filed(
+        facts, trends.DURATION_CONCEPTS["shares_diluted"], year, accession)
+    restated = series.get("shares_diluted", {}).get("values", {}).get(year)
+    if not original or not restated:
+        return None
+    ratio = restated / original
+    return round(ratio, 4) if ratio >= SPLIT_MIN or ratio <= 1 / SPLIT_MIN else None
+
+
+def history(companyfacts, series, derived, years):
+    """The valuation each earlier 10-K implied when it was filed. One row a year.
+
+    Same machinery as the block above — it calls `build`, so the EV bridge, the
+    refusal to print an EV without debt and cash, and the multi-class guard are
+    inherited rather than reimplemented. The only difference is the price: each
+    year is priced off its own cover page (`filing_price`) instead of a quote
+    feed, because today's quote over a 2019 share count is not a 2019 market
+    cap. Every one of those prices is a floor and is labelled as one.
+
+    Costs no request at all. The accessions, the floats and the share counts are
+    already inside the companyfacts call the run made.
+
+    The newest year is deliberately absent: it has the live valuation, and a
+    floor price printed beside a real one invites reading the two as
+    comparable.
+    """
+    facts = companyfacts.get("facts", {}).get("us-gaap", {})
+    accessions = trends.filing_accessions(facts, years)
+    out = {}
+    for year in years[:-1]:
+        accession = accessions.get(year)
+        if not accession:
+            continue
+        cover = cover_shares_from_facts(companyfacts, accession)
+        quote = filing_price(companyfacts, accession, cover)
+        v = build(series, derived, year, cover, {}, quote)
+        # Every multiple below is dollars over dollars and so survives a split
+        # untouched — except P/E, which is rebuilt here out of the market cap
+        # and net income rather than taken from `build`, where it is the
+        # as-filed price over a restated EPS. See SPLIT_MIN above.
+        restated = split_since(facts, series, year, accession)
+        net_income = series.get("net_income", {}).get("values", {}).get(year)
+        cap = v["market_cap"]
+        out[year] = {
+            "accession": accession,
+            # What later filings did to *this year's* figures: 4.0 means the
+            # EPS and share count in the ten-year series have been restated to
+            # a post-split basis while this cover page has not.
+            "restated_by": restated,
+            # Filled in below, once every year is known — a split is a fact
+            # about the calendar, not about which years happened to be
+            # restated, so it has to propagate backwards.
+            "split_since": restated,
+            "price_split_adjusted": None,
+            "price": quote.get("price"),
+            "price_as_of": quote.get("as_of"),
+            "price_error": quote.get("error"),
+            "is_floor": bool(quote.get("is_floor")),
+            "public_float": quote.get("public_float"),
+            "shares": (cover or {}).get("total"),
+            "shares_as_of": (cover or {}).get("as_of"),
+            "market_cap": v["market_cap"],
+            "enterprise_value": v["bridge"]["enterprise_value"],
+            "total_debt": v["bridge"]["total_debt"],
+            "cash_and_equivalents": v["bridge"]["cash_and_equivalents"],
+            "missing_components": v["bridge"]["missing_components"],
+            "ebit": v["operating"]["ebit"],
+            "ebitda": v["operating"]["ebitda"],
+            "warning": v.get("market_cap_warning"),
+            "pe": round(cap / net_income, 1) if cap and net_income else None,
+            **{k: v["multiples"].get(k) for k in
+               ("ev_sales", "ev_ebit", "ev_ebitda", "fcf_yield_pct")},
+        }
+
+    # A split is detected on the years a later filing restated — and those are
+    # not all the years it applies to. Apple's FY2018 and FY2019 counts were
+    # restated for the 2020 split; FY2016 and FY2017 never were, because the
+    # last filing to touch them predates it, so they sit on the pre-split basis
+    # with nothing to compare against and no factor of their own. But a split
+    # after 2018 is also a split after 2016. Carrying the factor backwards is
+    # what makes the adjusted price comparable down the whole row instead of
+    # only part of it.
+    carry = 1.0
+    for year in sorted(out, reverse=True):
+        row = out[year]
+        carry = max(carry, row["restated_by"] or 1.0)
+        row["split_since"] = round(carry, 4) if carry != 1.0 else None
+        row["price_split_adjusted"] = (
+            row["price"] / carry if row["price"] and carry != 1.0 else None)
+    return out
+
+
 def build(series, derived, year, cover, awards, quote, shares_override=None,
           ttm=None, companyfacts=None):
     """-> the whole valuation dict for one fiscal year.
@@ -665,8 +800,12 @@ def to_markdown(v, company, ticker):
     lines = [
         "# {} ({}) — valuation, FY ended {}".format(company, ticker, v["fiscal_year_end"]),
         "",
-        "Every figure below comes out of the 10-K. Nothing here is a live quote, so nothing "
-        "moves after the filing was accepted — including the price.",
+        "Every figure below comes out of the 10-K, with one exception: the share price. "
+        + ("It is a live quote, so the market cap, the enterprise value and every multiple "
+           "here move between runs while everything they multiply does not."
+           if q.get("is_live") else
+           "It is the filing's own — see the price section below — so nothing here moves "
+           "after the filing was accepted."),
         "",
         "## Share count",
         "",
@@ -808,7 +947,61 @@ def to_markdown(v, company, ticker):
             "",
         ]
     lines += _ttm_markdown(v.get("ttm"), v)
+    lines += _history_markdown(v.get("history"))
     return "\n".join(lines)
+
+
+def _history_markdown(h):
+    """One row per earlier fiscal year, priced off that year's own cover page."""
+    if not h:
+        return []
+    lines = [
+        "## What each earlier filing implied",
+        "",
+        "Every row is that fiscal year's own 10-K, priced off its own cover page: aggregate "
+        "market value of common equity held by non-affiliates, divided by the share count on "
+        "the same cover. No quote feed is involved and none could be — today's price over a "
+        "2019 share count is not a 2019 market cap.",
+        "",
+        "**Every price here is a floor.** Affiliate-held shares are excluded, so a filer whose "
+        "insiders hold a real stake prices low by roughly that percentage, and the float and "
+        "the share count are stamped months apart. Read the market caps as the public float "
+        "restated, not as historical closes. It costs no extra request — the accessions, the "
+        "floats and the counts are all in the companyfacts call the run already made.",
+        "",
+        "P/E here is market cap over net income, not the price over an EPS. The difference "
+        "only shows up across a stock split, and there it is the whole ball game: the price and "
+        "the share count on a 2019 cover page are on the pre-split basis, while the EPS in the "
+        "ten-year series has been restated to the post-split one. Dividing the two prints a P/E "
+        "four times too high and looks perfectly reasonable. Dollars over dollars cannot make "
+        "that mistake, and neither can any of the EV multiples, which are dollars throughout.",
+        "",
+        "| Year end | Implied price | Float measured | Shares (as filed) | Split since | "
+        "Market cap | EV | EV/EBITDA | P/E |",
+        "|---|---|---|---|---|---|---|---|---|",
+    ]
+    for year, r in sorted(h.items()):
+        lines.append("| {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
+            year,
+            "—" if r["price"] is None else "${:,.2f}".format(r["price"]),
+            r["price_as_of"] or "—",
+            _sh(r["shares"]),
+            "—" if not r["split_since"] else "{:g}:1 \u2192 ${:,.2f}".format(
+                r["split_since"], r["price_split_adjusted"])
+            if r["price_split_adjusted"] else "{:g}:1".format(r["split_since"]),
+            _m(r["market_cap"]),
+            _m(r["enterprise_value"]),
+            _x(r["ev_ebitda"]),
+            _x(r["pe"]),
+        ))
+    reasons = sorted({r["price_error"] for r in h.values() if r.get("price_error")})
+    reasons += sorted({r["warning"] for r in h.values() if r.get("warning")})
+    lines.append("")
+    if reasons:
+        lines += ["Why some rows are blank:", ""]
+        lines += ["- {}".format(r) for r in reasons]
+        lines.append("")
+    return lines
 
 
 def _ttm_markdown(t, v):
@@ -1151,8 +1344,94 @@ def demo():
     assert plain["ttm"] is None
     assert "No 10-Q post-dates this 10-K" in none_md and "Enterprise value" in none_md
 
+    # --- the implied valuation of each earlier year -----------------------
+    # FY2023 appears in its own 10-K and again as a comparative in FY2024's.
+    # Only the first one's cover page carries FY2023's float.
+    hist_facts = {"facts": {
+        "us-gaap": {"Revenues": {"units": {"USD": [
+            {"start": "2023-01-01", "end": "2023-12-31", "val": 100e6, "form": "10-K",
+             "filed": "2024-02-01", "accn": "fy2023"},
+            {"start": "2023-01-01", "end": "2023-12-31", "val": 101e6, "form": "10-K",
+             "filed": "2025-02-01", "accn": "fy2024"},
+            {"start": "2024-01-01", "end": "2024-12-31", "val": 120e6, "form": "10-K",
+             "filed": "2025-02-01", "accn": "fy2024"},
+        ]}}},
+        "dei": {
+            "EntityCommonStockSharesOutstanding": {"units": {"shares": [
+                {"end": "2024-02-01", "val": 10e6, "accn": "fy2023", "form": "10-K"},
+                {"end": "2025-02-01", "val": 9e6, "accn": "fy2024", "form": "10-K"}]}},
+            "EntityPublicFloat": {"units": {"USD": [
+                {"end": "2023-06-30", "val": 200e6, "accn": "fy2023", "form": "10-K"},
+                {"end": "2024-06-28", "val": 270e6, "accn": "fy2024", "form": "10-K"}]}},
+        }}}
+    hseries = {"revenue": {"values": {"2023-12-31": 100e6, "2024-12-31": 120e6}},
+               "cash": {"values": {"2023-12-31": 5e6, "2024-12-31": 6e6}},
+               "eps_diluted": {"values": {"2023-12-31": 1.0, "2024-12-31": 1.2}}}
+    hderived = {"2023-12-31": {"total_debt": 20e6, "ebitda": 30e6},
+                "2024-12-31": {"total_debt": 22e6, "ebitda": 35e6}}
+    h = history(hist_facts, hseries, hderived, ["2023-12-31", "2024-12-31"])
+    assert list(h) == ["2023-12-31"], "the newest year keeps its live valuation"
+    r = h["2023-12-31"]
+    assert r["accession"] == "fy2023", r["accession"]   # not the filing that restated it
+    assert r["price"] == 20.0 and r["is_floor"], r      # 200M float / 10M shares
+    assert r["market_cap"] == 200e6, r["market_cap"]
+    assert r["enterprise_value"] == 215e6, r            # + 20 debt − 5 cash
+    assert r["ev_ebitda"] == 7.2, r["ev_ebitda"]
+    assert r["pe"] is None and r["split_since"] is None, r   # no net income tagged here
+
+    # A 4-for-1 split between the filing and today. The cover page is pre-split
+    # and the ten-year EPS series is post-split, so P/E must not be built from
+    # the two of them. (Apple, FY2019 -> the August 2020 split.)
+    hist_facts["facts"]["us-gaap"]["WeightedAverageNumberOfDilutedSharesOutstanding"] = {
+        "units": {"shares": [
+            {"start": "2023-01-01", "end": "2023-12-31", "val": 10e6, "form": "10-K",
+             "filed": "2024-02-01", "accn": "fy2023"}]}}
+    split_series = dict(hseries,
+                        net_income={"values": {"2023-12-31": 10e6}},
+                        eps_diluted={"values": {"2023-12-31": 0.25}},   # post-split
+                        shares_diluted={"values": {"2023-12-31": 40e6}})  # 4x the filed count
+    sh = history(hist_facts, split_series, hderived, ["2023-12-31", "2024-12-31"])["2023-12-31"]
+    assert sh["split_since"] == 4.0 and sh["restated_by"] == 4.0, sh
+    assert sh["price_split_adjusted"] == 5.0, sh["price_split_adjusted"]   # $20 / 4
+    # 200M market cap over 10M of net income. Price over the restated EPS would
+    # have said 80x — four times the truth, and completely plausible-looking.
+    assert sh["pe"] == 20.0, sh["pe"]
+    assert "market cap over net income" in " ".join(_history_markdown({"y": sh}))
+
+    # An earlier year that no later filing restated has no factor of its own —
+    # its series figures and its cover page are both pre-split. The split still
+    # happened after it, so the adjusted price must reach it anyway.
+    hist_facts["facts"]["us-gaap"]["Revenues"]["units"]["USD"].append(
+        {"start": "2022-01-01", "end": "2022-12-31", "val": 90e6, "form": "10-K",
+         "filed": "2023-02-01", "accn": "fy2022"})
+    hist_facts["facts"]["dei"]["EntityCommonStockSharesOutstanding"]["units"]["shares"].append(
+        {"end": "2023-02-01", "val": 10e6, "accn": "fy2022", "form": "10-K"})
+    hist_facts["facts"]["dei"]["EntityPublicFloat"]["units"]["USD"].append(
+        {"end": "2022-06-30", "val": 160e6, "accn": "fy2022", "form": "10-K"})
+    older = dict(split_series,
+                 revenue={"values": dict(split_series["revenue"]["values"],
+                                         **{"2022-12-31": 90e6})})
+    both = history(hist_facts, older, dict(hderived, **{"2022-12-31": {}}),
+                   ["2022-12-31", "2023-12-31", "2024-12-31"])
+    assert both["2022-12-31"]["restated_by"] is None, "nothing restated this year"
+    assert both["2022-12-31"]["split_since"] == 4.0, both["2022-12-31"]["split_since"]
+    assert both["2022-12-31"]["price_split_adjusted"] == 4.0, both["2022-12-31"]  # $16 / 4
+    hmd = _history_markdown(h)
+    assert any("2023-06-30" in ln for ln in hmd), hmd   # the float's own date, not the year end
+    assert any("floor" in ln for ln in hmd)
+
+    # A year whose filing tags no float gets a blank row and a stated reason,
+    # never a price built out of the neighbouring year's cover page.
+    no_float = {"facts": {"us-gaap": hist_facts["facts"]["us-gaap"],
+                          "dei": {"EntityCommonStockSharesOutstanding":
+                                  hist_facts["facts"]["dei"]["EntityCommonStockSharesOutstanding"],
+                                  "EntityPublicFloat": {"units": {"USD": []}}}}}
+    blank = history(no_float, hseries, hderived, ["2023-12-31", "2024-12-31"])["2023-12-31"]
+    assert blank["price"] is None and blank["market_cap"] is None, blank
+    assert "no aggregate public float" in blank["price_error"], blank["price_error"]
+
     print("ok: valuation — cover/class split, footnote scaling, filing price, "
-          "EV bridge, TTM block")
+          "EV bridge, TTM block, per-year implied valuation")
 
 
 if __name__ == "__main__":

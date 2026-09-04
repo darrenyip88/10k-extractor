@@ -59,7 +59,12 @@ output (see `SKILL.md`, which wires up `/10k <TICKER>`).
 ./run_10k.sh BRK.B --shares 2.16e9  # your own share count — needed for multi-class filers
 ./run_10k.sh COST --filing-price  # no quote call — price off the cover page instead
 ./run_10k.sh COST --no-price      # no price, so no market cap, EV or multiples
+./run_10k.sh AAPL --rebuild       # regenerate every output from the cache, re-price, no download
 ```
+
+`--refresh` is for "the data might have changed" and re-downloads. `--rebuild` is
+for "the code changed": it reads the cached SEC responses, takes one fresh quote,
+and rewrites every file. Nothing hits EDGAR.
 
 Output goes to `filings/<TICKER>/<fiscal-year-end>/`. Start with `SUMMARY.md`.
 
@@ -69,9 +74,14 @@ metadata.json       CIK, SIC industry, auditor + PCAOB ID, exchange, source URLs
 sections/           item1_business, item1a_risk_factors, item7_mdna, item8_..., 10 in all
 summaries/          the same Items condensed to about a third, every sentence the filer's own
 statements/         income_statement, balance_sheet, cash_flow, equity (.md + .json)
-trends.md/.json     10 years of financials + margins, FCF, ROE, CAGR, share count
+trends.md/.json     10 years of financials + margins, FCF, ROE, ROIC, the working
+                    capital cycle, CAGR, share count
                     (.json also carries ttm, mrq and the balance-sheet snapshot)
-valuation.md/.json  share count three ways, price, market cap, EV bridge, EBIT/EBITDA, multiples
+model.csv           the same history as one spreadsheet — years across, raw dollars,
+                    blanks left blank, LTM as the last column
+xbrl_by_year.json   every concept this filer tagged, valued at each year end
+valuation.md/.json  share count three ways, price, market cap, EV bridge, EBIT/EBITDA,
+                    multiples, and what every earlier year's filing implied
 risk_headings.md    every risk factor headline — the Item 1A index
 risk_diff.md        risks added, removed, and reworded vs last year
 full_text.txt       the whole filing as plain text
@@ -167,6 +177,37 @@ The snapshot is deliberately independent of the TTM roll-forward. The roll needs
 a comparable prior-year period and returns nothing without one — but a balance
 sheet needs no comparable, so a filer that can't be rolled forward still gets
 its cash, debt, assets, inventory and share count.
+
+## The model block
+
+The ten-year table is not just the income statement. Everything a forecast is
+built from comes out of the same free companyfacts call, so it is all there:
+
+| | |
+|---|---|
+| Income | SG&A, R&D, selling & marketing, stock comp, income tax expense, interest income |
+| Balance sheet | receivables, payables, current assets and liabilities, PP&E, goodwill, intangibles, deferred revenue, retained earnings |
+| Cash flow | acquisitions, buybacks, dividends |
+| Computed | effective tax rate, NOPAT, invested capital, ROIC, asset turnover, current ratio, working capital, net debt / EBITDA, interest coverage, receivable / inventory / payable days, the cash conversion cycle, capex and R&D and SG&A and stock comp as a share of revenue, FCF conversion, FCF and book value and revenue per share, dividend payout, dividends + buybacks against free cash flow |
+
+Two of those are worth spelling out, because the definition is the number:
+
+- **Effective tax rate** is income tax expense over pretax income, computed only
+  when pretax income is positive. A tax rate over a loss is a number with no
+  forecasting meaning and printing one invites it into a model.
+- **Invested capital** is total debt + total equity − cash and short-term
+  investments, and ROIC is NOPAT over that. Other definitions exist; this one is
+  printed beside the figure so it can be recomputed rather than guessed at.
+
+Receivable days run on revenue and inventory and payable days on cost of
+revenue, so a filer with no cost line — a bank — gets blanks rather than days
+computed against the wrong denominator.
+
+`model.csv` is all of it in one file: metrics down, fiscal years across, the
+trailing twelve months as the last column, values in whole dollars with no
+symbols or separators, and an empty cell wherever the filer tagged nothing. The
+blank matters — writing 0 there would be a number the company never reported,
+and every average taken over that column afterwards would be wrong.
 
 ## Condensed sections
 
@@ -382,6 +423,40 @@ carries undimensioned facts only, so Costco's membership fees — a $5,323M line
 sitting in plain sight on its income statement — are simply absent from it. Those
 come off the rendered statement instead, where the dimension label is a row with
 no numbers ("Membership fees") and the value sits two rows below it.
+
+**A filer can change the scale it tags a share count at, mid-history.**
+McDonald's tags `WeightedAverageNumberOfDilutedSharesOutstanding` as
+750,100,000 through fiscal 2020 and as 716.4 from 2021 — the same figure, in
+millions. Untouched it rendered as 0.0M shares, a −100% share-count change in
+2021 and a +100,000% one in 2022, and every per-share figure over it was out by
+a factor of a million. The cross-check is the filer's own arithmetic: diluted
+EPS is net income over the diluted count, so net income ÷ EPS is what the count
+has to be. That is also what makes the fix safe against a reverse split, where
+the count really does fall hard — EPS moves with it, so the implied count moves
+too and nothing is rescaled. Only a units error puts a clean power of ten
+between them.
+
+**A 10-K restates the two years before it, so "this year's filing" is the
+*earliest*-filed row, not the latest.** Everywhere else in this tool the newest
+restatement wins, because the question is "what is this figure now". For pricing
+a historical year the question is "which document is this", and the newest row
+for FY2019 belongs to the FY2021 10-K. The public float and share count on a
+cover page belong to the filing that printed them; pairing FY2019's numbers with
+FY2021's cover page prices the wrong year.
+
+**A stock split silently breaks any per-share ratio built across it.** Apple's
+FY2019 cover page states 4,443,265,000 shares and an implied $196.86, while the
+FY2019 EPS in the ten-year series is $2.97 — restated for the 4-for-1 split of
+August 2020. Dividing one by the other gives a P/E of 66 against a real 16.6,
+and nothing about 66 looks wrong. Dollar figures are immune, so the historical
+P/E is built out of market cap over net income instead, and every EV multiple
+was already dollars over dollars. Two further traps under that one: the split
+factor is detected by comparing a year's own filed share count against the
+current series, which only fires on the years a later filing actually restated —
+Apple's FY2018 and FY2019, not its FY2016 — so the factor has to be carried
+backwards, because a split after 2018 is also a split after 2016. And in the
+page's own tables, the change in a margin is a difference in points, never a
+percentage change: "gross margin grew 2%" is a sentence with no meaning.
 
 **Paths in this project contain spaces.** Quote everything in shell.
 
