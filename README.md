@@ -24,7 +24,10 @@ python3 serve.py
 ```
 
 Then <http://localhost:4321>. See `site/README.md` for what the server exposes.
-Live test: <https://filed-br1e.onrender.com>
+Live: <https://filed-br1e.onrender.com> (full app, Render free tier — sleeps
+after 15 min idle, so the first hit can take a minute). The Vercel copy at
+<https://10k-extractor-private.vercel.app> is the design only; Vercel can't
+run `serve.py`, so its ticker box always reports the extractor is unreachable.
 
 Or from the Dock. `./make_app.sh` builds **Filed.app** into `/Applications`: it
 starts the server if it isn't already up and opens the site. It's a launcher,
