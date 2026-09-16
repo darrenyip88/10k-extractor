@@ -23,6 +23,7 @@
   --cream:#EFD5C8;   /* 11.4:1 — display type, values, the hairline button */
   --dim:#B79C8D;     /*  6.2:1 — body text                                 */
   --faint:#A98D7D;   /*  5.2:1 — tracked micro labels, placeholders        */
+  --quiet:#8A7264;   /*  3.6:1 — the labels that used to be --umber and shouldn't  */
   --umber:#5F4F45;   /*  2.0:1 — rules and the bar. Never carries a word.  */
   --alarm:#E28C74;
   --hair:rgba(239,213,200,.15);
@@ -43,7 +44,7 @@ body{
   /* relative so .cosmos can be absolute over the *document*, not the viewport */
   position:relative;overflow-x:clip;
   margin:0;background:var(--void);color:var(--dim);
-  font-family:var(--sans);font-size:15px;
+  font-family:var(--sans);font-size:.9375rem;
   font-synthesis-weight:none;-webkit-font-smoothing:antialiased;
 }
 img{display:block;max-width:100%}
@@ -57,7 +58,7 @@ a{color:inherit}
 .skip{
   position:absolute;left:var(--pad);top:.6rem;z-index:9;
   transform:translateY(-160%);
-  font-family:var(--sans);font-weight:600;font-size:.625rem;
+  font-family:var(--sans);font-weight:600;font-size:.6875rem;
   letter-spacing:.2em;text-transform:uppercase;color:var(--cream);
   background:var(--void);border:1px solid var(--cream);
   padding:.55rem .85rem;text-decoration:none;
@@ -68,13 +69,16 @@ a{color:inherit}
    display serif and this, and nothing in between */
 .micro{
   font-family:var(--sans);font-weight:600;
-  font-size:.625rem;letter-spacing:.22em;text-transform:uppercase;
+  font-size:.6875rem;letter-spacing:.22em;text-transform:uppercase;
   color:var(--faint);
 }
 
 /* ---- top edge ---------------------------------------------------------- */
 .top{
-  position:absolute;top:0;left:0;right:0;z-index:4;
+  position:sticky;top:0;z-index:4;
+  /* Opaque, not a blur. A backdrop-filter over flat near-black buys nothing
+     the ground colour doesn't, and this page has no translucent layer. */
+  background:var(--void);
   display:flex;align-items:baseline;gap:clamp(1rem,3vw,2.25rem);
   padding:clamp(1.1rem,2.6vh,1.8rem) var(--pad);
 }
@@ -84,7 +88,7 @@ a{color:inherit}
 }
 .top nav{display:flex;gap:clamp(.9rem,2.4vw,1.75rem)}
 .top nav a{text-decoration:none;transition:color .2s}
-.top nav a:hover{color:var(--cream)}
+@media (hover:hover){.top nav a:hover{color:var(--cream)}}
 
 /* ---- the hero ---------------------------------------------------------- */
 .hero{
@@ -145,6 +149,13 @@ a{color:inherit}
   position:absolute;inset:0;z-index:-1;
   pointer-events:none;
 }
+/* Every position in this layer is a percentage of the *document*, and the
+   document goes from one viewport to ~7,000px the moment a filing renders. The
+   placement below was measured against the landing page, where the reading
+   column leaves outer margins free; with a filing on screen the column is the
+   whole width and eight planets and both plates land on top of numbers. Same
+   answer the narrow breakpoint already gives: dim the layer, keep the world. */
+body:has(.filing:not([hidden])) .cosmos{opacity:.4}
 
 .planet{
   position:absolute;
@@ -271,16 +282,18 @@ a{color:inherit}
 .cta input::placeholder{color:var(--faint);letter-spacing:.06em;text-transform:none}
 .cta input:focus{outline:none}
 .cta input:disabled{opacity:.55}
+/* native pattern validation blocks the submit, so this only has to show it */
+.cta input:not(:placeholder-shown):invalid{color:var(--alarm)}
 .cta button{
   flex:none;cursor:pointer;
   font-family:var(--sans);font-weight:600;
-  font-size:.625rem;letter-spacing:.2em;text-transform:uppercase;
+  font-size:.6875rem;letter-spacing:.2em;text-transform:uppercase;
   color:var(--cream);background:none;
   border:0;border-left:1px solid var(--hair);
   padding:.72rem 1.05rem;
   transition:background-color .22s cubic-bezier(.22,1,.36,1),color .22s cubic-bezier(.22,1,.36,1);
 }
-.cta button:hover:not(:disabled){background:var(--cream);color:var(--void)}
+@media (hover:hover){.cta button:hover:not(:disabled){background:var(--cream);color:var(--void)}}
 /* pressed feedback: 1px down, no scale. A control with a hairline border and no
    fill has nothing to squash — a push is the only physical move it can make */
 .cta button:active:not(:disabled){transform:translateY(1px)}
@@ -288,13 +301,13 @@ a{color:inherit}
 .cta:focus-within{outline:1px solid var(--cream);outline-offset:2px}
 
 .hint{margin:.95rem 0 0;font-size:.75rem;line-height:1.6;color:var(--faint)}
-.hint button{
+.hint button{position:relative;
   font:inherit;color:var(--cream);background:none;border:0;padding:0 .12em;
   cursor:pointer;border-bottom:1px solid var(--hair);
 }
-.hint button:hover{border-bottom-color:var(--cream)}
+@media (hover:hover){.hint button:hover{border-bottom-color:var(--cream)}}
 .hint button:active{transform:translateY(1px)}
-.hint code{font-family:var(--mono);font-size:.9em}
+.hint code{font-family:var(--mono);font-size:1em}
 
 /* Narrow: the figure becomes a real grid row above the copy instead of a layer
    behind it. Overlapping display type onto flesh tones would fail contrast at
@@ -353,6 +366,21 @@ a{color:inherit}
 /* ---- the filing -------------------------------------------------------- */
 .filing{max-width:var(--measure);margin:clamp(3rem,8vh,5.5rem) auto 0;padding:0 var(--pad)}
 .filing[hidden]{display:none}
+.filing:focus{outline:none}
+/* The old result stays on screen while the next one is fetched, dimmed rather
+   than deleted. Wiping it left fifteen seconds of empty page where the answer
+   had been, and the previous year is usually still what you want to look at. */
+.filing[data-stale]{opacity:.3;pointer-events:none;transition:opacity .2s}
+
+/* transform and opacity only — `rise` animates a 9px blur, which is fine on
+   four hero lines and not on a dozen tables. */
+@keyframes settle{from{opacity:0;transform:translateY(.6rem)}to{opacity:1;transform:none}}
+.filing>*{animation:settle .45s cubic-bezier(.22,1,.36,1) both}
+.filing>:nth-child(2){animation-delay:.04s}
+.filing>:nth-child(3){animation-delay:.08s}
+.filing>:nth-child(4){animation-delay:.12s}
+.filing>:nth-child(5){animation-delay:.16s}
+.filing>:nth-child(n+6){animation-delay:.2s}
 .filing__head h2{
   margin:0 0 .5rem;font-family:var(--serif);font-weight:400;
   font-size:clamp(1.7rem,3.6vw,2.6rem);line-height:1.1;
@@ -361,7 +389,7 @@ a{color:inherit}
 .filing__head .sub{margin:0;font-size:.6875rem;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
 .filing__head .src{margin:.55rem 0 0;font-size:.75rem;color:var(--dim)}
 .filing__head .src a{color:var(--cream);text-decoration:none;border-bottom:1px solid var(--hair)}
-.filing__head .src a:hover{border-bottom-color:var(--cream)}
+@media (hover:hover){.filing__head .src a:hover{border-bottom-color:var(--cream)}}
 
 /* fixed tracks, not auto-fit: eight metrics must land on full rows or the
    hairlines end mid-air where the empty cells would be */
@@ -372,7 +400,7 @@ a{color:inherit}
 @media (min-width:560px){.metrics{grid-template-columns:repeat(4,1fr)}}
 .metric{padding:1rem .5rem 1rem 0;border-bottom:1px solid var(--hair)}
 .metric dt{
-  font-size:.5625rem;letter-spacing:.18em;text-transform:uppercase;
+  font-size:.6875rem;letter-spacing:.18em;text-transform:uppercase;
   color:var(--faint);margin-bottom:.45rem;font-weight:600;
 }
 .metric dd{
@@ -384,11 +412,11 @@ a{color:inherit}
   font-family:var(--sans);font-size:.6875rem;letter-spacing:.02em;color:var(--dim);
 }
 /* a value the filer never tagged. Left visibly blank, never substituted. */
-.metric .none{color:var(--umber)}
+.metric .none{color:var(--quiet)}
 
 .filing h3{
   margin:2.6rem 0 0;font-family:var(--sans);font-weight:600;
-  font-size:.625rem;letter-spacing:.22em;text-transform:uppercase;color:var(--faint);
+  font-size:.6875rem;letter-spacing:.22em;text-transform:uppercase;color:var(--faint);
 }
 
 .ftable{width:100%;border-collapse:collapse;font-size:.8125rem;margin-top:1.2rem}
@@ -396,7 +424,7 @@ a{color:inherit}
 .ftable th:first-child,.ftable td:first-child{text-align:left;padding-left:0}
 .ftable th:last-child,.ftable td:last-child{padding-right:0}
 .ftable th{
-  font-family:var(--sans);font-weight:600;font-size:.5625rem;
+  font-family:var(--sans);font-weight:600;font-size:.6875rem;
   letter-spacing:.16em;text-transform:uppercase;color:var(--faint);
 }
 .ftable td{font-variant-numeric:tabular-nums;color:var(--dim)}
@@ -421,22 +449,24 @@ a{color:inherit}
 .find__box input:focus{outline:none}
 .find__box .slash{
   flex:none;align-self:center;padding:0 .8rem;
-  font-family:var(--mono);font-size:.6875rem;color:var(--umber);
+  font-family:var(--mono);font-size:.6875rem;color:var(--quiet);
 }
 .find__box:focus-within .slash{visibility:hidden}
 
 /* Filters as tracked micro labels, not pills — a pill is a rounded card and
    this page has neither. The active one is cream over a cream hairline. */
 .chips{display:flex;flex-wrap:wrap;gap:.55rem 1.15rem;margin:1rem 0 0}
-.chip{
-  font-family:var(--sans);font-weight:600;font-size:.5625rem;
+.chip{position:relative;
+  font-family:var(--sans);font-weight:600;font-size:.6875rem;
   letter-spacing:.2em;text-transform:uppercase;color:var(--faint);
   background:none;border:0;border-bottom:1px solid transparent;
   padding:0 0 3px;cursor:pointer;transition:color .18s,border-color .18s;
 }
-.chip:hover{color:var(--cream)}
+@media (hover:hover){.chip:hover{color:var(--cream)}}
 .chip[aria-pressed="true"]{color:var(--cream);border-bottom-color:var(--cream)}
 .chip:active{transform:translateY(1px)}
+/* 9px of tracked type is a 12px-tall target. The box grows, the type doesn't. */
+.chip::before,.read .swap::before,.hint button::before{content:"";position:absolute;inset:-14px -10px}
 
 /* Eleven year columns don't fit any screen. The table scrolls inside its own
    box so the page never does, and the metric name stays put while it moves. */
@@ -452,16 +482,16 @@ a{color:inherit}
 .ftable th.here{border-bottom-color:var(--cream)}
 .ftable td.verbatim{font-variant-numeric:tabular-nums}
 .tag{
-  font-family:var(--sans);font-weight:600;font-size:.5rem;letter-spacing:.14em;
-  text-transform:uppercase;color:var(--umber);white-space:nowrap;
+  font-family:var(--sans);font-weight:600;font-size:.6875rem;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--quiet);white-space:nowrap;
 }
 /* A second control row: how the numbers are shown, and how to get them out.
    Grouped behind their own tracked labels so nine controls read as three
    decisions rather than a row of nine equal buttons. */
 .chips--view{gap:.55rem .9rem;align-items:baseline}
 .chips__label{
-  font-family:var(--sans);font-weight:600;font-size:.5rem;letter-spacing:.2em;
-  text-transform:uppercase;color:var(--umber);
+  font-family:var(--sans);font-weight:600;font-size:.6875rem;letter-spacing:.2em;
+  text-transform:uppercase;color:var(--quiet);
 }
 .chips__sep{flex:1 1 auto}
 .find__note{margin:1.1rem 0 0;font-size:.8125rem;line-height:1.6;color:var(--faint);max-width:66ch}
@@ -471,6 +501,10 @@ a{color:inherit}
 /* ---- year tabs --------------------------------------------------------- */
 .tabs{
   display:flex;gap:0;margin:2.6rem 0 0;overflow-x:auto;
+  /* proximity, not mandatory: a flick gets a landing point, a small nudge to
+     see the next year's label doesn't get yanked back. The scroller below is
+     left unsnapped — an eleven-column table should stop where it was put. */
+  scroll-snap-type:x proximity;
   border-bottom:1px solid var(--hair);
 }
 .tab{
@@ -479,13 +513,14 @@ a{color:inherit}
   padding:.7rem 1.05rem .62rem;color:var(--faint);
   transition:color .18s,border-color .18s;
 }
+.tab{scroll-snap-align:start}
 .tab:first-child{padding-left:0}
 .tab .fy{display:block;font-family:var(--serif);font-size:1.05rem;color:inherit}
 .tab .kind{
   display:block;margin-top:.26rem;font-family:var(--sans);font-weight:600;
-  font-size:.5rem;letter-spacing:.18em;text-transform:uppercase;color:var(--umber);
+  font-size:.6875rem;letter-spacing:.18em;text-transform:uppercase;color:var(--quiet);
 }
-.tab:hover{color:var(--dim)}
+@media (hover:hover){.tab:hover{color:var(--dim)}}
 .tab[aria-selected="true"]{color:var(--cream);border-bottom-color:var(--cream)}
 .tab[aria-selected="true"] .kind{color:var(--faint)}
 .tab:active{transform:translateY(1px)}
@@ -493,16 +528,16 @@ a{color:inherit}
 /* one hairline rectangle, the CTA's shape at label size — used by "pull this
    year's filing" and "re-price" */
 .act{
-  font-family:var(--sans);font-weight:600;font-size:.5625rem;
+  font-family:var(--sans);font-weight:600;font-size:.6875rem;
   letter-spacing:.2em;text-transform:uppercase;color:var(--cream);
   background:none;border:1px solid var(--cream);padding:.5rem .8rem;cursor:pointer;
   transition:background-color .22s,color .22s;
 }
-.act:hover:not(:disabled){background:var(--cream);color:var(--void)}
+@media (hover:hover){.act:hover:not(:disabled){background:var(--cream);color:var(--void)}}
 .act:active:not(:disabled){transform:translateY(1px)}
 .act:disabled{border-color:var(--hair);color:var(--faint);cursor:default}
 .act--quiet{border-color:var(--hair);color:var(--faint)}
-.act--quiet:hover:not(:disabled){background:none;color:var(--cream);border-color:var(--cream)}
+@media (hover:hover){.act--quiet:hover:not(:disabled){background:none;color:var(--cream);border-color:var(--cream)}}
 
 .risk{margin-top:1.2rem;font-size:.875rem;line-height:1.6}
 .risk .tally{margin:0;color:var(--dim);font-size:.8125rem}
@@ -523,7 +558,7 @@ a{color:inherit}
 }
 .read summary::-webkit-details-marker{display:none}
 .read .no{
-  grid-column:1/-1;font-family:var(--sans);font-weight:600;font-size:.5625rem;
+  grid-column:1/-1;font-family:var(--sans);font-weight:600;font-size:.6875rem;
   letter-spacing:.2em;text-transform:uppercase;color:var(--faint);
 }
 .read .title{font-family:var(--serif);font-size:1.15rem;line-height:1.25;color:var(--cream)}
@@ -535,8 +570,18 @@ a{color:inherit}
 /* The section itself, set as prose rather than dumped as preformatted text.
    The measure is the point: 66ch is readable, a 56rem line of 10-K prose is
    not. Scrolled in place so the page keeps its shape. */
+.read details::details-content{
+  block-size:0;overflow:hidden;
+  transition:block-size .32s cubic-bezier(.22,1,.36,1),content-visibility .32s allow-discrete;
+}
+.read details[open]::details-content{block-size:auto}
+
+/* The prose box cuts off at 30rem. Fade the last line instead of guillotining
+   it — a hard edge reads as the end of the section, which it isn't. */
 .read .body{
   margin:0 0 1.4rem;max-height:30rem;overflow:auto;
+  -webkit-mask-image:linear-gradient(#000 calc(100% - 2.5rem),transparent);
+          mask-image:linear-gradient(#000 calc(100% - 2.5rem),transparent);
   padding-top:1rem;border-top:1px solid var(--hair);
 }
 .read .body p{
@@ -546,7 +591,7 @@ a{color:inherit}
 }
 .read .body h4{
   margin:1.6em 0 .55em;max-width:66ch;
-  font-family:var(--sans);font-weight:600;font-size:.5625rem;
+  font-family:var(--sans);font-weight:600;font-size:.6875rem;
   letter-spacing:.2em;text-transform:uppercase;color:var(--cream);
 }
 .read .body h4:first-child{margin-top:0}
@@ -555,14 +600,14 @@ a{color:inherit}
 }
 /* condensed / full text, at the micro size so it never competes with the
    drawer's own heading */
-.read .swap{
-  font-family:var(--sans);font-weight:600;font-size:.5625rem;
+.read .swap{position:relative;
+  font-family:var(--sans);font-weight:600;font-size:.6875rem;
   letter-spacing:.2em;text-transform:uppercase;color:var(--faint);
   background:none;border:0;border-bottom:1px solid var(--hair);
   padding:0 0 3px;margin:0 0 1.1rem;cursor:pointer;
   transition:color .18s,border-color .18s;
 }
-.read .swap:hover{color:var(--cream);border-bottom-color:var(--cream)}
+@media (hover:hover){.read .swap:hover{color:var(--cream);border-bottom-color:var(--cream)}}
 .read .swap:active{transform:translateY(1px)}
 
 /* paths like statements/consolidated_balance_sheets_parenthetical.json are
@@ -574,7 +619,7 @@ a{color:inherit}
   font-family:var(--mono);font-size:.75rem;color:var(--dim);text-decoration:none;
   transition:color .18s;
 }
-.files a:hover{color:var(--cream)}
+@media (hover:hover){.files a:hover{color:var(--cream)}}
 .files .name{min-width:0;overflow-wrap:anywhere}
 .files .kb{color:var(--faint);flex:none;white-space:nowrap}
 .runstat{margin:1.6rem 0 0;font-family:var(--mono);font-size:.75rem;color:var(--faint)}
@@ -608,7 +653,7 @@ a{color:inherit}
 .statement{display:grid;gap:clamp(2.2rem,5vh,3.2rem)}
 .statement h3{
   margin:0 0 .7rem;font-family:var(--sans);font-weight:600;
-  font-size:.625rem;letter-spacing:.22em;text-transform:uppercase;color:var(--faint);
+  font-size:.6875rem;letter-spacing:.22em;text-transform:uppercase;color:var(--faint);
 }
 .statement p{
   margin:0;font-family:var(--serif);font-weight:400;
@@ -628,7 +673,7 @@ a{color:inherit}
 }
 .close p{margin:0;font-size:.75rem;line-height:1.7;color:var(--faint);max-width:60ch}
 .close a{color:var(--dim);text-decoration:none;border-bottom:1px solid var(--hair)}
-.close a:hover{color:var(--cream)}
+@media (hover:hover){.close a:hover{color:var(--cream)}}
 
 /* ---- entrance ---------------------------------------------------------- */
 @keyframes rise{
@@ -640,8 +685,14 @@ a{color:inherit}
 .hero__copy .cta{animation-delay:.18s}
 .hero__copy .hint{animation-delay:.24s}
 
+/* Reduced motion means a gentler equivalent, not a dead page: the drifting
+   layer and every entrance go, the colour fades on the controls stay. */
 @media (prefers-reduced-motion:reduce){
-  *,*::before,*::after{animation:none!important;transition-duration:.01ms!important}
+  *,*::before,*::after{
+    animation:none!important;
+    transition-property:color,background-color,border-color,opacity!important;
+  }
+  html{scroll-behavior:auto}
 }
 
 </style>
@@ -703,6 +754,7 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
     <form class="cta" id="run-form" autocomplete="off">
       <input id="ticker" name="ticker" type="text" placeholder="Ticker"
              maxlength="10" spellcheck="false" autocapitalize="characters"
+             pattern="[A-Za-z][A-Za-z.\-]{0,9}"
              aria-label="Ticker symbol" required>
       <button type="submit" id="run-btn"><span class="btn__label">Pull the filing</span></button>
     </form>
@@ -731,7 +783,7 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
      tables, the risk diff — and a polite region announces all of it. The status
      line above already says the extraction finished; the result is then read on
      request like any other page content. -->
-<section class="filing" id="filing" hidden aria-label="Extracted filing"></section>
+<section class="filing" id="filing" hidden tabindex="-1" aria-label="Extracted filing"></section>
 
 <section class="band" id="output">
   <h2 class="micro">What lands in the folder</h2>
@@ -1372,6 +1424,9 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
   function flash(button, text){
     const was = button.textContent;
     button.textContent = text;
+    // Pin the box at its widest state and leave it there, so the row reflows
+    // once on the first copy instead of twice on every copy.
+    button.style.minWidth = button.offsetWidth + 'px';
     setTimeout(() => { button.textContent = was; }, 1600);
   }
 
@@ -1789,9 +1844,12 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
     if (!ticker) return;
     const year = opts.year || null;
 
-    btn.disabled = true; input.disabled = true;
+    // Only the button is disabled. Disabling the field too cost a typo fix and
+    // dropped it out of the tab order for the whole run; the double-submit guard
+    // is the button, and serve.py backs it with a 429 either way.
+    btn.disabled = true;
     label.textContent = 'Pulling';
-    out.hidden = true; out.innerHTML = '';
+    if (!out.hidden) out.dataset.stale = '1';
     status.dataset.tone = '';
 
     // The counter lives in an aria-hidden span and the sentence around it is
@@ -1823,6 +1881,9 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
       status.textContent = '';
       F.loadedYear = year;
       render(data);
+      // the viewport is about to move; take focus with it, or a keyboard user is
+      // left on the submit button above a screen they can't see
+      out.focus({preventScroll: true});
       out.scrollIntoView({
         behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
         block: 'start'
@@ -1835,7 +1896,8 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
         ? 'Can’t reach the extractor. Start it with:  python3 serve.py'
         : err.message;
     } finally {
-      btn.disabled = false; input.disabled = false;
+      delete out.dataset.stale;
+      btn.disabled = false;
       label.textContent = 'Pull the filing';
     }
   }
