@@ -1,4 +1,4 @@
 {
   "outputDirectory": "site",
-  "rewrites": [{ "source": "/", "destination": "/v4-icarus.html" }]
+  "redirects": [{ "source": "/", "destination": "/v4-icarus.html", "permanent": false }]
 }
