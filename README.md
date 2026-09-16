@@ -24,6 +24,7 @@ python3 serve.py
 ```
 
 Then <http://localhost:4321>. See `site/README.md` for what the server exposes.
+Live test: <https://10k-extractor-private.vercel.app>
 
 Or from the Dock. `./make_app.sh` builds **Filed.app** into `/Applications`: it
 starts the server if it isn't already up and opens the site. It's a launcher,
