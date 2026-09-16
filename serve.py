@@ -1017,6 +1017,8 @@ def demo():
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--port", type=int, default=4321)
+    p.add_argument("--host", default="127.0.0.1",
+                   help="0.0.0.0 to accept outside connections (Render, Docker)")
     p.add_argument("--self-check", action="store_true",
                    help="run the offline checks and exit")
     args = p.parse_args()
@@ -1027,7 +1029,7 @@ def main():
     if not SITE.is_dir():
         sys.exit("site/ not found next to serve.py")
 
-    srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    srv = ThreadingHTTPServer((args.host, args.port), Handler)
     print("Filed  ->  http://localhost:{}".format(args.port))
     print("Ctrl-C to stop.")
     try:

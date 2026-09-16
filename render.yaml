@@ -1,0 +1,10 @@
+# Render Blueprint: dashboard -> New -> Blueprint -> pick this repo.
+# Free tier sleeps after 15 min idle; first request after that takes ~30-60s.
+# Disk is ephemeral, so filings/ resets on every deploy — it's a cache anyway.
+services:
+  - type: web
+    name: filed
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 serve.py --host 0.0.0.0 --port $PORT
