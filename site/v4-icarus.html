@@ -1875,6 +1875,11 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ticker: ticker, year: year, refresh: !!opts.refresh})
       });
+      // A static host (Vercel, http.server) answers /api/extract with an HTML
+      // 404, and res.json() on that throws "Unexpected token 'T'" before the
+      // status check ever runs. Non-JSON means no extractor behind the page.
+      const isJson = (res.headers.get('content-type') || '').includes('json');
+      if (!isJson) throw new Error('NetworkError: no extractor behind this page');
       const data = await res.json();
       stopTimer();
       if (!res.ok) throw new Error(data.error || ('Request failed (' + res.status + ')'));
