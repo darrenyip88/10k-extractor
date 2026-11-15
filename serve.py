@@ -706,7 +706,12 @@ def run_extractor(ticker, year=None, rebuild=False):
     extraction written before a schema change is brought up to date without
     asking SEC for anything it has already answered.
     """
-    cmd = [sys.executable, "extract_10k.py", ticker]
+    # A .TO ticker is a TSX issuer: no 10-K exists, so a different script pulls
+    # its AIF, MD&A and statements and writes the same output files.
+    # "-TO" too: that is how the folder is named, so it is what a cached-ticker
+    # chip on the page sends back.
+    script = "extract_tsx.py" if re.search(r"[.-]TO$", ticker.upper()) else "extract_10k.py"
+    cmd = [sys.executable, script, ticker]
     if year:
         cmd += ["--year", str(year)]
     if rebuild:
@@ -864,7 +869,7 @@ class Handler(SimpleHTTPRequestHandler):
         ticker = str(payload.get("ticker", "")).strip().upper()
         if not TICKER_RE.match(ticker):
             return self.send_json(
-                {"error": "That doesn't look like a ticker. Try AAPL, BRK.B, JPM."}, 400)
+                {"error": "That doesn't look like a ticker. Try AAPL, BRK.B, JPM — or RY.TO for the TSX."}, 400)
 
         year = payload.get("year")
         if year not in (None, "", 0):

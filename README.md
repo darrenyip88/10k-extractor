@@ -64,6 +64,7 @@ output (see `SKILL.md`, which wires up `/10k <TICKER>`).
 ./run_10k.sh COST --filing-price  # no quote call — price off the cover page instead
 ./run_10k.sh COST --no-price      # no price, so no market cap, EV or multiples
 ./run_10k.sh AAPL --rebuild       # regenerate every output from the cache, re-price, no download
+./run_10k.sh RY.TO                # a TSX company — see "TSX tickers" below
 ```
 
 `--refresh` is for "the data might have changed" and re-downloads. `--rebuild` is
@@ -94,6 +95,75 @@ full_text.txt       the whole filing as plain text
 
 Re-running is a no-op unless you pass `--refresh`. Responses are cached to
 `.cache/` forever, which is safe because filings are immutable once accepted.
+
+## TSX tickers
+
+```bash
+./run_10k.sh RY.TO        # Royal Bank
+./run_10k.sh DOL.TO       # Dollarama
+./run_10k.sh GIB.A.TO     # share classes: dot before the class, then .TO
+```
+
+Add `.TO` and the ticker goes to `scripts/extract_tsx.py` instead. Nothing in the
+10-K path changed; a ticker without `.TO` never touches the new file. The web
+page takes the same tickers.
+
+A Canadian company files no 10-K. The same material sits in three documents on
+SEDAR+, and all three get pulled:
+
+| Document | 10-K equivalent | Lands in |
+|---|---|---|
+| Annual Information Form (AIF) | Items 1, 1A, 3, 5 | `sections/aif_*.md`, `sections/aif.md` |
+| Annual MD&A | Item 7 | `sections/mda.md` |
+| Audited annual statements | Item 8 | `sections/financial_statements.md` |
+
+Plus `sections/risk_factors.md` (from whichever of the AIF or MD&A actually
+holds the risks), the condensed twins in `summaries/`, the three raw PDFs, and
+the risk headline index and diff when the PDF's fonts allow it.
+
+**Where the numbers come from depends on the company.** Two cases:
+
+- **Also files with the SEC** (RY, TD, CNQ, SU, ENB, SHOP, BCE, NTR and roughly
+  200 more): ten-year history, as-filed statements, market cap, EV bridge and
+  multiples, all from the XBRL in its 40-F or 10-K. Same tables as a US ticker.
+- **TSX only** (Dollarama, Couche-Tard, Loblaw, Constellation): the documents, a
+  live price and a market cap. No history table, no ratios, no EV. SEDAR+
+  filings are PDFs with no tagged data, and nothing is scraped out of a PDF
+  table to fake it. The statements are there as text.
+
+Learned the hard way:
+
+- **SEDAR+ can't be scripted.** It has no API and a bot wall in front (a plain
+  request gets a 403). TMX Money's public GraphQL endpoint lists the same
+  filings for any TSX symbol with direct PDF links, no key, no quota. That's
+  the document source. It's undocumented, so it can change without notice.
+- **One TMX call returns 2,000 filings, newest first.** Fine for Dollarama (73
+  filings in two years). RBC files about 2,000 a quarter, one per note issue,
+  so its annual report isn't in the first page. `list_filings` walks back a
+  page at a time: 10 calls for RY, 5 for TD, 1 for Dollarama.
+- **Figures are in the reporting currency, and the page still prints `$`.** RY,
+  CNQ and ENB report in CAD; Nutrien and Shopify in USD. `SUMMARY.md` and the
+  company name on the page say which. The quote is matched to it: a CAD
+  reporter is priced off its Toronto line, a USD reporter off its US line, so
+  no multiple divides one currency by another.
+- **IFRS, not US GAAP.** A 40-F filer tags `ifrs-full` concepts. `as_us_gaap`
+  renames about 45 of them to the us-gaap names `trends.py` already reads, and
+  only like-for-like lines. IFRS finance costs aren't interest expense, and
+  IFRS 16 has no operating/finance lease split, so both show as not tagged.
+  Lease liabilities are therefore not in the EV bridge.
+- **No LTM column.** Canadian quarterlies reach EDGAR as 6-Ks and most aren't
+  tagged. Fiscal year only.
+- **`--year` runs are unpriced.** Same rule as the 10-K path (no live quote over
+  an old share count), and these filings state no public float to fall back on.
+- **The risk diff only runs like for like.** PDF bold detection varies by year:
+  Nutrien's 2025 AIF gives up 23 headlines and its 2024 one gives 9, from the
+  same layout. Diffing those reports 14 "new" risks that aren't. When last
+  year's count is under half of this year's, the diff is skipped and says so.
+- **The EDGAR link is a name match.** TMX's company name against SEC's, legal
+  suffixes stripped. A miss falls back to documents only; `--cik` links it by
+  hand.
+- **Needs `pypdf`** (`pip3 install pypdf`). It's in `requirements.txt`, and only
+  the TSX path imports it.
 
 ## The price
 

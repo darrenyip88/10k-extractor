@@ -44,6 +44,12 @@ def test_extract():
     extract_10k.demo()
 
 
+def test_extract_tsx():
+    import extract_tsx
+
+    extract_tsx.demo()
+
+
 @pytest.mark.network
 def test_live_quote():
     """The one non-SEC call in the project. Undocumented endpoint, so this is
