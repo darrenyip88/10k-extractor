@@ -753,8 +753,8 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
 
     <form class="cta" id="run-form" autocomplete="off">
       <input id="ticker" name="ticker" type="text" placeholder="Ticker"
-             maxlength="10" spellcheck="false" autocapitalize="characters"
-             pattern="[A-Za-z][A-Za-z.\-]{0,9}"
+             maxlength="17" spellcheck="false" autocapitalize="characters"
+             pattern="([Tt][Ss][XxEe]:)?[A-Za-z][A-Za-z0-9.\-]{0,12}"
              aria-label="Ticker symbol" required>
       <button type="submit" id="run-btn"><span class="btn__label">Pull the filing</span></button>
     </form>
@@ -764,7 +764,7 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
          what is actually on disk, which comes back in ~0.3s instead of
          fifteen seconds cold. -->
     <p class="hint">
-      Straight from SEC EDGAR — no key, no quota.
+      Straight from SEC EDGAR, and from SEDAR+ for TSX tickers (DOL, RY, TSX:L) — no key, no quota.
       <span id="picks">Try
       <button type="button" data-fill="AAPL">AAPL</button>,
       <button type="button" data-fill="NVDA">NVDA</button>,
@@ -1448,7 +1448,7 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
   }
 
   function downloadCSV(){
-    const name = (D.ticker || 'filing') + '-' +
+    const name = (D.ticker || 'filing').replace(':', '-') + '-' +
       (F.filter === 'all' ? 'metrics' : F.filter) + '-' + (D.period || '') + '.csv';
     const blob = new Blob(['﻿' + toDelimited(',', true)],
                           {type: 'text/csv;charset=utf-8'});
@@ -1468,7 +1468,8 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
         'aria-selected="' + (y === F.year) + '" tabindex="' + (y === F.year ? '0' : '-1') + '" ' +
         'aria-label="Fiscal year ended ' + esc(y) + '">' +
         '<span class="fy">FY' + esc(y.slice(0, 4)) + '</span>' +
-        '<span class="kind">' + (y === D.period ? '10-K + 10-Qs' : '10-K') + '</span>' +
+        '<span class="kind">' + ((D.exchanges || []).includes('TSX') ? 'annual'
+          : y === D.period ? '10-K + 10-Qs' : '10-K') + '</span>' +
       '</button>').join('');
     // scrollLeft rather than scrollIntoView: the strip is the only thing that
     // should move, and scrollIntoView drags the page with it.
@@ -1780,10 +1781,12 @@ FORM: classical-glitch. Pinned by the user from the Icarus plate.
         '<h2>' + esc(d.company || d.ticker) + '</h2>' +
         '<p class="sub">' + esc(d.ticker) + ' · FY ended ' + esc(d.period) +
           ' · filed ' + esc(d.filed) + (d.sic ? ' · ' + esc(d.sic) : '') + '</p>' +
-        '<p class="src">CIK ' + esc(d.cik) +
+        // A TSX company has no 10-K, and a TSX-only one has no CIK either.
+        '<p class="src">' + (d.cik ? 'CIK ' + esc(d.cik) : 'Files on SEDAR+, not with the SEC') +
           (d.auditor ? ' · audited by ' + esc(d.auditor) : '') +
           ' · <a href="' + esc(d.source_url) + '" target="_blank" ' +
-          'rel="noopener noreferrer">filing on SEC.gov</a></p>' +
+          'rel="noopener noreferrer">' + ((d.exchanges || []).includes('TSX')
+            ? 'filings on TMX Money' : 'filing on SEC.gov') + '</a></p>' +
       '</div>');
 
     parts.push(searchShell(d));

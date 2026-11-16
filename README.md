@@ -64,7 +64,7 @@ output (see `SKILL.md`, which wires up `/10k <TICKER>`).
 ./run_10k.sh COST --filing-price  # no quote call — price off the cover page instead
 ./run_10k.sh COST --no-price      # no price, so no market cap, EV or multiples
 ./run_10k.sh AAPL --rebuild       # regenerate every output from the cache, re-price, no download
-./run_10k.sh RY.TO                # a TSX company — see "TSX tickers" below
+./run_10k.sh DOL                  # a TSX company — see "TSX tickers" below
 ```
 
 `--refresh` is for "the data might have changed" and re-downloads. `--rebuild` is
@@ -99,14 +99,22 @@ Re-running is a no-op unless you pass `--refresh`. Responses are cached to
 ## TSX tickers
 
 ```bash
-./run_10k.sh RY.TO        # Royal Bank
-./run_10k.sh DOL.TO       # Dollarama
-./run_10k.sh GIB.A.TO     # share classes: dot before the class, then .TO
+./run_10k.sh DOL          # Dollarama. No suffix: it's typed like any other ticker
+./run_10k.sh RY           # Royal Bank
+./run_10k.sh GIB.A        # share classes: dot before the class
+./run_10k.sh TSX:L        # Loblaw. Bare L is Loews, so say the exchange
 ```
 
-Add `.TO` and the ticker goes to `scripts/extract_tsx.py` instead. Nothing in the
-10-K path changed; a ticker without `.TO` never touches the new file. The web
-page takes the same tickers.
+`scripts/route.py` decides where a ticker goes. A company with a 10-K goes to
+the 10-K path (AAPL, and Shopify and Enbridge too, which file one). Everything
+else that Toronto lists goes to `scripts/extract_tsx.py`: companies EDGAR has
+never heard of (DOL, ATD) and companies that file a 40-F there (RY, CNQ). The
+web page takes the same tickers.
+
+The only time the exchange is needed is a collision. A 10-K always wins a bare
+ticker, so `L` is Loews and `T` is AT&T. Write `TSX:L` and `TSX:T` for Loblaw
+and Telus. `L.TO` still works. Output folders keep a `-TO` (`filings/L-TO/`) so
+the two never share one.
 
 A Canadian company files no 10-K. The same material sits in three documents on
 SEDAR+, and all three get pulled:
@@ -115,21 +123,52 @@ SEDAR+, and all three get pulled:
 |---|---|---|
 | Annual Information Form (AIF) | Items 1, 1A, 3, 5 | `sections/aif_*.md`, `sections/aif.md` |
 | Annual MD&A | Item 7 | `sections/mda.md` |
-| Audited annual statements | Item 8 | `sections/financial_statements.md` |
+| Audited annual statements | Item 8 | `sections/financial_statements.md`, `statements/*.md` |
 
 Plus `sections/risk_factors.md` (from whichever of the AIF or MD&A actually
 holds the risks), the condensed twins in `summaries/`, the three raw PDFs, and
 the risk headline index and diff when the PDF's fonts allow it.
 
-**Where the numbers come from depends on the company.** Two cases:
+**Every TSX company gets the numbers now.** Ten-year history, ratios, as-filed
+statements, market cap, EV bridge, multiples. Where they come from depends on
+the company:
 
-- **Also files with the SEC** (RY, TD, CNQ, SU, ENB, SHOP, BCE, NTR and roughly
-  200 more): ten-year history, as-filed statements, market cap, EV bridge and
-  multiples, all from the XBRL in its 40-F or 10-K. Same tables as a US ticker.
-- **TSX only** (Dollarama, Couche-Tard, Loblaw, Constellation): the documents, a
-  live price and a market cap. No history table, no ratios, no EV. SEDAR+
-  filings are PDFs with no tagged data, and nothing is scraped out of a PDF
-  table to fake it. The statements are there as text.
+- **Also files with the SEC** (RY, TD, CNQ, SU, BCE, NTR and roughly 200 more):
+  the XBRL in its 40-F. Tagged, so exact.
+- **TSX only** (Dollarama, Couche-Tard, Loblaw, Constellation, Metro): read off
+  the statements it filed on SEDAR+. No XBRL exists for these, so
+  `scripts/sedar_statements.py` does what Capital IQ does: take the filed PDF,
+  find the three primary statements, read each line into a standard set of
+  metrics, and keep the page number. `statement_map.md` in the output folder is
+  the click-through: every figure, the filed line it came from, the page.
+
+How the PDF read works, in order:
+
+1. One statements PDF per fiscal year. Each has two years in it (this year and
+   the comparative), so ten years of history is nine filings.
+2. `pdfminer` gives the position of every word. A row is the words at the same
+   height; a column is a shared right edge. That is how a note reference, a
+   blank cell and a `-` get told apart.
+3. Labels are matched to metrics by pattern: "Sales" is revenue, "Additions to
+   property, plant and equipment" is capex. No match means a blank, never a
+   guess.
+4. The balance sheet has to tie: assets = liabilities + equity, or it's dropped.
+   The income statement check (pretax − tax = net income) is printed but
+   doesn't block, since discontinued operations break it honestly.
+5. A later filing's restated comparative replaces the original figure, same as
+   EDGAR. `statement_map.md` lists every figure that changed.
+
+What it has been run on (fiscal 2025 filings, November 2026):
+
+| Result | Companies |
+|---|---|
+| All three statements read, balance sheet ties | DOL, ATD, L, MRU, CSU, NFI, WSP, SAP, CTC.A, EMP.A, WN, CCL.B, TIH, ATZ, AC, H, FTT, QBR.B, PKI |
+| Ties, but thin (insurer: no capex, no D&A, no operating income) | IFC |
+| Doesn't read (life insurer, statements laid out differently) | GWO |
+
+Ten full years run end to end on DOL, ATD, L, CSU and NFI, every balance sheet
+tying. Dollarama's revenue row reads 2,963 → 7,256 (CAD millions, FY2017 →
+FY2026). A cold run is nine PDF downloads; a cached one takes about 15 seconds.
 
 Learned the hard way:
 
@@ -137,33 +176,60 @@ Learned the hard way:
   request gets a 403). TMX Money's public GraphQL endpoint lists the same
   filings for any TSX symbol with direct PDF links, no key, no quota. That's
   the document source. It's undocumented, so it can change without notice.
-- **One TMX call returns 2,000 filings, newest first.** Fine for Dollarama (73
-  filings in two years). RBC files about 2,000 a quarter, one per note issue,
-  so its annual report isn't in the first page. `list_filings` walks back a
-  page at a time: 10 calls for RY, 5 for TD, 1 for Dollarama.
-- **Figures are in the reporting currency, and the page still prints `$`.** RY,
-  CNQ and ENB report in CAD; Nutrien and Shopify in USD. `SUMMARY.md` and the
-  company name on the page say which. The quote is matched to it: a CAD
-  reporter is priced off its Toronto line, a USD reporter off its US line, so
-  no multiple divides one currency by another.
-- **IFRS, not US GAAP.** A 40-F filer tags `ifrs-full` concepts. `as_us_gaap`
-  renames about 45 of them to the us-gaap names `trends.py` already reads, and
-  only like-for-like lines. IFRS finance costs aren't interest expense, and
-  IFRS 16 has no operating/finance lease split, so both show as not tagged.
-  Lease liabilities are therefore not in the EV bridge.
-- **No LTM column.** Canadian quarterlies reach EDGAR as 6-Ks and most aren't
-  tagged. Fiscal year only.
+- **pypdf scrambles tables.** Constellation's cash flow statement comes out of
+  pypdf as a column of numbers, then a column of labels in a different order.
+  pdfminer reads the same page correctly. pypdf still does the prose (it tracks
+  bold fonts, which the risk index needs).
+- **Some filers print totals with no label.** Metro and NFI never write "Total
+  assets". The grand total is the figure that appears twice, and an unlabelled
+  line only counts as a section's subtotal if it adds up to the lines above it.
+- **Loblaw files everything twice.** English, then the same documents in French
+  a week later under the same names. The first one filed is the one used.
+- **No separate statements some years.** Loblaw's 2026 filing is one 172-page
+  annual report. The statements are found inside it by their titles.
+- **Expenses printed as negatives.** Metro and Finning show cost of sales below
+  zero. Signs are flipped to the usual convention when cost of sales is
+  negative or pretax + tax lands on net income.
+- **A TSX-only company that reports in US dollars has no US price.**
+  Constellation, Couche-Tard and NFI report in USD and trade in CAD. The
+  Toronto price is converted at the live rate (`CADUSD=X`) and the output says
+  so, so no multiple divides CAD by USD.
+- **Debt is every liability line that says debt.** "Long-term debt", "Senior
+  notes", "Debentures", "Bank indebtedness", split current and non-current by
+  the section they sit in. `statement_map.md` shows which lines were summed.
+  Constellation's IRGA liability isn't called debt, so it isn't in there. A
+  balance sheet with no such line at all (Aritzia) is taken as zero debt.
+- **Finance costs stand in for interest expense.** IFRS filers print "finance
+  costs" or "net financing costs", which can carry accretion and FX. It's only
+  used when no line says "interest expense", and the map names the line.
+- **Leases are a memo line, not in EV.** IFRS 16 puts every lease on the
+  balance sheet. They're summed and shown under the EV bridge, same treatment
+  as the 10-K path.
+- **Old per-share figures sit on the old basis.** Dollarama split 3-for-1 in
+  2018 and Loblaw 4-for-1 in 2025. Years no later filing restated keep the
+  pre-split EPS, so the EPS row has a step in it. Net income doesn't.
+- **One TMX call returns 2,000 filings, newest first.** Fine for Dollarama (ten
+  years in one call). RBC files about 2,000 a quarter, one per note issue, so
+  `list_filings` walks back a page at a time: 10 calls for RY's last two years.
+  A TSX-only bank (National Bank) probably hits the 15-page cap before ten
+  years. Untested: TMX timed out on it.
+- **Figures are in the reporting currency, and the page still prints `$`.**
+  `SUMMARY.md` and the company name on the page say which.
+- **IFRS, not US GAAP, for 40-F filers.** `as_us_gaap` renames about 45
+  `ifrs-full` concepts to the us-gaap names `trends.py` already reads.
+- **No LTM column.** Fiscal year only. The interim statements are on SEDAR+ and
+  the same reader could roll the year forward; it doesn't yet.
 - **`--year` runs are unpriced.** Same rule as the 10-K path (no live quote over
   an old share count), and these filings state no public float to fall back on.
 - **The risk diff only runs like for like.** PDF bold detection varies by year:
   Nutrien's 2025 AIF gives up 23 headlines and its 2024 one gives 9, from the
-  same layout. Diffing those reports 14 "new" risks that aren't. When last
-  year's count is under half of this year's, the diff is skipped and says so.
+  same layout. When last year's count is under half of this year's, the diff is
+  skipped and says so.
 - **The EDGAR link is a name match.** TMX's company name against SEC's, legal
-  suffixes stripped. A miss falls back to documents only; `--cik` links it by
+  suffixes stripped. A miss falls back to reading the PDFs; `--cik` links it by
   hand.
-- **Needs `pypdf`** (`pip3 install pypdf`). It's in `requirements.txt`, and only
-  the TSX path imports it.
+- **Needs `pypdf` and `pdfminer.six`.** Both are in `requirements.txt`, and only
+  the TSX path imports them.
 
 ## The price
 

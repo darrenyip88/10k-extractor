@@ -50,6 +50,18 @@ def test_extract_tsx():
     extract_tsx.demo()
 
 
+def test_sedar_statements():
+    import sedar_statements
+
+    sedar_statements.demo()
+
+
+def test_route():
+    import route
+
+    route.demo()
+
+
 @pytest.mark.network
 def test_live_quote():
     """The one non-SEC call in the project. Undocumented endpoint, so this is

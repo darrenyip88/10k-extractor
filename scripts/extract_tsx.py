@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The 10-K, for a TSX-listed company: ./run_10k.sh RY.TO
+"""The 10-K, for a TSX-listed company: ./run_10k.sh DOL   (or TSX:DOL, or DOL.TO)
 
 A Canadian issuer files no 10-K. The same material is split across three
 documents filed on SEDAR+, and this pulls all three:
@@ -14,13 +14,14 @@ Learned the hard way:
     gets a 403) and has no API. TMX Money's public GraphQL endpoint lists the
     same filings for every TSX symbol with a direct PDF link, no key and no
     quota. That is the document source here.
-  - PDFs carry no XBRL, so there is no tagged history in them. About 200 TSX
-    companies are also listed in the US and file a 40-F (or a 10-K) on EDGAR,
-    and *those* are tagged. So the numbers — ten-year history, as-filed
-    statements, the EV bridge — come from EDGAR whenever the company is there,
-    and are simply absent when it isn't (Dollarama, Couche-Tard, Loblaw).
-    Absent, not estimated: nothing is scraped out of a PDF table and passed
-    off as tagged data.
+  - PDFs carry no XBRL. About 200 TSX companies are also listed in the US and
+    file a 40-F (or a 10-K) on EDGAR, and *those* are tagged, so their numbers
+    — ten-year history, as-filed statements, the EV bridge — come from EDGAR.
+    Everyone else (Dollarama, Couche-Tard, Loblaw) gets the same numbers read
+    off the statements they filed: sedar_statements.py finds the three primary
+    statements in each year's PDF, reads them line by line, and drops any
+    balance sheet that doesn't tie. statement_map.md records the filed line
+    and page behind every figure. Read, not estimated.
   - A 40-F filer tags in IFRS and usually in CAD. trends.py and valuation.py
     read us-gaap concepts in USD, so `as_us_gaap` below renames the concepts
     and they run unchanged. Every money figure for such a filer is in its
@@ -28,8 +29,8 @@ Learned the hard way:
   - Canadian quarterlies go to EDGAR as 6-Ks. Some are tagged, most aren't, so
     there is no LTM roll-forward here: fiscal year only.
 
-Nothing in this file is imported by the 10-K path. `run_10k.sh` and `serve.py`
-send a ticker here only when it ends in .TO.
+Nothing in this file is imported by the 10-K path. `route.py` decides which
+of the two a ticker goes to.
 """
 
 import argparse
@@ -46,6 +47,7 @@ from sec_client import TICKER_MAP_MAX_AGE, TICKER_MAP_URL, SECClient, SECError  
 import requests  # noqa: E402
 
 import sections
+import sedar_statements
 import statements
 import trends
 import valuation
@@ -145,15 +147,29 @@ def annual_sets(filings):
         near = [n for n in near if n[0] <= 120]
         return min(near, key=lambda n: n[0])[1] if near else None
 
-    out, seen = [], set()
-    for fs in sorted(docs.get("fs", []), key=lambda d: d["filingDate"], reverse=True):
+    # Oldest first, so the copy that anchors a year is the first one filed.
+    # Loblaw files everything again in French a week later, under the same
+    # name; the later copy waits in fs_alt in case the first can't be read.
+    # ponytail: "first filed is the English one". A filer that files the French
+    # copy first, or both the same day, needs a look at the text instead.
+    out = []
+    by_date = lambda d: d["filingDate"]
+    anchors = sorted(docs.get("fs", []), key=by_date)
+    # No separate statements at all (Loblaw, 2026): the annual report holds them.
+    anchors += [d for d in sorted(docs.get("annual_report", []), key=by_date)
+                if not any(abs((date.fromisoformat(d["filingDate"][:10])
+                                - date.fromisoformat(a["filingDate"][:10])).days) < 120 for a in anchors)]
+    for fs in sorted(anchors, key=by_date):
         day = date.fromisoformat(fs["filingDate"][:10])
-        if any(abs((day - s).days) < 120 for s in seen):
-            continue  # a refiled or French copy of the same year
-        seen.add(day)
-        out.append({"fs": fs, "mda": nearest("mda", day), "aif": nearest("aif", day),
-                    "annual_report": nearest("annual_report", day)})
-    return out
+        same = next((s for s in out if abs((day - s["day"]).days) < 120), None)
+        if same:
+            same["fs_alt"].append(fs)
+            continue
+        out.append({"day": day, "fs": fs, "fs_alt": [], "mda": nearest("mda", day),
+                    "aif": nearest("aif", day), "annual_report": nearest("annual_report", day)})
+    for s in out:
+        del s["day"]
+    return out[::-1]
 
 
 # --- PDF -> text ------------------------------------------------------------
@@ -242,7 +258,9 @@ AIF_HEADS = [
     ("business", "Description of the business",
      r"(?:narrative )?description of (?:the|our) business|business of the (?:corporation|company)"
      r"|describe the business|our business"),
-    ("risk_factors", "Risk factors", r"risk factors|risks and uncertainties"),
+    # Loblaw heads it "4. RISKS", Couche-Tard "Business Risks".
+    ("risk_factors", "Risk factors", r"risk factors|risks and uncertainties"
+                                     r"|(?:business |enterprise )?risks(?: and risk management)?"),
     ("dividends", "Dividends", r"dividends(?: and distributions)?|dividend policy"),
     ("capital_structure", "Capital structure",
      r"(?:description of )?(?:the |our )?(?:capital|share capital) structure"),
@@ -269,7 +287,7 @@ HEAD_LINE = r"^[ \t]*(?:(?:item\s+)?\d{{1,2}}(?:\.\d{{1,2}})?[ \t]*[.:)–—-]?
 RISK_RE = re.compile(HEAD_LINE.format(
     r"risk factors(?: and (?:risk )?management| that may affect future results)?"
     r"|risks and uncertainties|(?:enterprise )?risk management|managing risk"
-    r"|risks? and risk management"), re.I | re.M)
+    r"|risks? and risk management|(?:business |enterprise )?risks"), re.I | re.M)
 
 
 def split_aif(text):
@@ -348,10 +366,11 @@ def write_section(out_dir, name, title, text, source, bold):
 
 # --- EDGAR, for the numbers -------------------------------------------------
 
-# ifrs-full concept -> the us-gaap concept trends.py already looks for. Only
-# like-for-like lines. IFRS finance costs are not interest expense (they carry
-# accretion and FX), and IFRS 16 has no operating/finance lease split, so
-# neither is mapped and both show as not tagged.
+# ifrs-full concept -> the us-gaap concept trends.py already looks for.
+# Like-for-like lines, with one stand-in: IFRS finance costs carry accretion
+# and FX as well as interest, so they map to InterestAndDebtExpense, which
+# trends.py only reads when no InterestExpense is tagged. IFRS 16 has no
+# operating/finance lease split, so leases aren't mapped.
 IFRS_TO_GAAP = {
     "Revenue": "Revenues",
     "CostOfSales": "CostOfRevenue",
@@ -363,6 +382,7 @@ IFRS_TO_GAAP = {
         "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
     "IncomeTaxExpenseContinuingOperations": "IncomeTaxExpenseBenefit",
     "InterestExpense": "InterestExpense",
+    "FinanceCosts": "InterestAndDebtExpense",
     "DilutedEarningsLossPerShare": "EarningsPerShareDiluted",
     "BasicAndDilutedEarningsLossPerShare": "EarningsPerShareBasicAndDiluted",
     "BasicEarningsLossPerShare": "EarningsPerShareBasic",
@@ -487,28 +507,94 @@ def numbers_from_edgar(client, cik, subs, period, years, out_dir):
             stmts, auditor = statements.fetch_statements(client, cik, accession.replace("-", ""))
         except SECError as e:
             print("  as-filed statements: skipped ({})".format(e))
+    write_statements(out_dir, stmts)
+    return data, facts, stmts, auditor, accession, currency
+
+
+def write_statements(out_dir, stmts):
     for st in stmts:
         write(out_dir / "statements" / (st["name"] + ".md"),
               statements.to_markdown(st["title"], st["table"]))
         write(out_dir / "statements" / (st["name"] + ".json"),
               json.dumps({"title": st["title"], **st["table"]}, indent=2))
-    return data, facts, stmts, auditor, accession, currency
+
+
+# concept -> the row name trends.md prints it under, for statement_map.md
+METRIC_OF = {c: name.replace("_", " ") for table in (trends.DURATION_CONCEPTS, trends.INSTANT_CONCEPTS)
+             for name, concepts in table.items() for c in concepts}
+
+
+_READ = {}
+
+
+def read_statements(pdfs, doc):
+    """sedar_statements.read_filing, once per document: the year-end lookup
+    and the numbers both want it, and a 170-page annual report takes seconds."""
+    url = doc["urlToPdf"]
+    if url not in _READ:
+        try:
+            _READ[url] = sedar_statements.read_filing(pdfs.get(url, binary=True), doc["filingDate"][:10])
+        except Exception as e:  # one unreadable PDF costs two years, not the run
+            print("    filed {}: unreadable ({}: {})".format(doc["filingDate"][:10], type(e).__name__, e))
+            _READ[url] = None
+    return _READ[url]
+
+
+def numbers_from_sedar(pdfs, sets, period, years, out_dir, fallback_currency):
+    """The same numbers for a company EDGAR has never heard of, read off the
+    statements it filed. One PDF per fiscal year, two years in each.
+    -> (trends data, facts, statements, currency, parsed filings) or None."""
+    parsed = []
+    for s in sets[:max(1, years - 1)]:
+        f = None
+        for doc in [s["fs"]] + s.get("fs_alt", []):
+            filed = doc["filingDate"][:10]
+            f = read_statements(pdfs, doc)
+            if f and f["values"]:
+                break
+        if not f or not f["values"]:
+            print("    filed {}: no statements found in the PDF".format(filed))
+            continue
+        print("    year ended {} (filed {}): {} lines read — {}".format(
+            f["period"], filed, len(f["values"]), "; ".join(f["checks"]) or "no tie-out possible"))
+        parsed.append(f)
+    if not parsed or parsed[0]["period"] != period:
+        return None
+    facts = sedar_statements.as_companyfacts(parsed)
+    currency = parsed[0]["currency"] or fallback_currency
+    data = trends.build(facts, max_years=years, as_of=period, with_ttm=False)
+    stmts = sedar_statements.statement_tables(parsed[0])
+    write_statements(out_dir, stmts)
+    write(out_dir / "statement_map.md", sedar_statements.map_markdown(parsed, METRIC_OF))
+    return data, facts, stmts, currency, parsed
 
 
 # --- the run ----------------------------------------------------------------
 
+TSX_PREFIX = re.compile(r"^(TSX|TSE)[:.]", re.I)
+TSX_SUFFIX = re.compile(r"[.:-](TO|CA)$", re.I)
+
+
 def parse_ticker(raw):
-    """'ry.to' -> ('RY-TO' for the folder, 'RY' for TMX, 'RY.TO' for Yahoo).
-    Share classes: GIB.A.TO -> TMX 'GIB.A', Yahoo 'GIB-A.TO'."""
-    folder = SECClient.normalize_ticker(raw)  # validates; dots -> dashes
-    if not folder.endswith("-TO") or len(folder) < 4:
-        raise SECError("{!r} is not a TSX ticker — write it with .TO, e.g. RY.TO".format(raw))
-    base = folder[:-3]
-    return folder, base.replace("-", "."), base + ".TO"
+    """Any way of writing a Toronto symbol -> (folder, TMX symbol, Yahoo symbol).
+
+    'DOL', 'TSX:DOL' and 'dol.to' are all ('DOL-TO', 'DOL', 'DOL.TO').
+    Share classes: GIB.A -> TMX 'GIB.A', Yahoo 'GIB-A.TO'. The folder keeps
+    its -TO so Loblaw (TSX:L) and Loews (L) don't land in the same place.
+    """
+    base = TSX_SUFFIX.sub("", TSX_PREFIX.sub("", raw.strip()))
+    base = SECClient.normalize_ticker(base)  # validates; dots -> dashes
+    return base + "-TO", base.replace("-", "."), base + ".TO"
+
+
+def display_ticker(folder):
+    """'GIB-A-TO' -> 'TSX:GIB.A', the way a terminal writes it."""
+    return "TSX:" + folder[:-3].replace("-", ".")
 
 
 def summary_markdown(meta, docs, written, summaries, data, val, risk_heads, risk_from,
-                     diff, stmt_names, tagged):
+                     diff, stmt_names, source):
+    tagged = bool(source)
     cur = meta["currency"] or meta["quote_currency"] or "CAD"
     lines = [
         "# {} ({}) — annual filings for fiscal year ended {}".format(
@@ -535,9 +621,13 @@ def summary_markdown(meta, docs, written, summaries, data, val, risk_heads, risk
         lines += [
             "## Key numbers — fiscal {} ({} millions)".format(y[:4], cur),
             "",
-            "From the XBRL this company files with the SEC (CIK {}). **Every money figure "
-            "in this folder is in {}**, including where a table prints a bare `$`.".format(
-                meta["cik"], cur),
+            ("From the XBRL this company files with the SEC (CIK {}).".format(meta["cik"])
+             if source == "edgar" else
+             "Read off the audited statements this company filed on SEDAR+. It files nothing "
+             "with the SEC, so there is no XBRL: each figure is a line of the PDF, and "
+             "`statement_map.md` lists the line and the page.")
+            + " **Every money figure in this folder is in {}**, including where a table "
+              "prints a bare `$`.".format(cur),
             "",
             "| | |",
             "|---|---|",
@@ -551,16 +641,15 @@ def summary_markdown(meta, docs, written, summaries, data, val, risk_heads, risk
         eps = data["series"]["eps_diluted"]["values"].get(y)
         lines.append("| EPS diluted | {} |".format("—" if eps is None else "{:,.2f}".format(eps)))
         lines += ["", "{} fiscal years of history in `trends.md` and `model.csv`. No LTM "
-                      "column: Canadian quarterlies reach EDGAR as 6-Ks, which mostly aren't "
-                      "tagged, so there is nothing to roll the year forward with.".format(len(fyes)), ""]
+                      "column: fiscal year only.".format(len(fyes)), ""]
     else:
         lines += [
             "## Key numbers",
             "",
-            "None tagged. This company doesn't file with the SEC, and SEDAR+ filings are PDFs "
-            "with no XBRL — so there is no ten-year history, no ratio table and no EV bridge. "
-            "The statements are in `sections/financial_statements.md` as text, exactly as "
-            "filed. Nothing here is estimated to fill the gap.",
+            "None. This company doesn't file with the SEC, and the three primary statements "
+            "couldn't be read out of its PDF (or the balance sheet didn't tie, and was "
+            "dropped). The statements are in `sections/financial_statements.md` as text, "
+            "exactly as filed. Nothing here is estimated to fill the gap.",
             "",
         ]
 
@@ -600,7 +689,11 @@ def summary_markdown(meta, docs, written, summaries, data, val, risk_heads, risk
             rel, key.replace("_", " "),
             " — condensed: `{}`".format(summaries[key]) if summaries.get(key) else ""))
     for name in stmt_names:
-        lines.append("| `statements/{}.md` | as filed with the SEC |".format(name))
+        lines.append("| `statements/{}.md` | {} |".format(
+            name, "as filed with the SEC" if source == "edgar" else "as filed on SEDAR+"))
+    if source == "sedar":
+        lines.append("| `statement_map.md` | the filed line and page behind every number, "
+                     "and the tie-outs |")
     if tagged:
         lines += ["| `trends.md`, `model.csv` | {} years of tagged history |".format(len(fyes)),
                   "| `valuation.md` | price, market cap, EV bridge |"]
@@ -625,14 +718,24 @@ def run(args):
         raise SECError("{} is not a symbol TMX Money knows. Check the ticker on money.tmx.com "
                        "(share classes are written RCI.B.TO).".format(symbol))
     company = quote_tmx["name"]
+    ticker = display_ticker(folder)
+
+    # Where the numbers will come from decides how far back to list: EDGAR has
+    # the whole history in one file, the PDFs have two years apiece.
+    cik, us_ticker, subs = args.cik, None, None
+    if cik:
+        subs = sec.submissions(cik)
+        us_ticker = (subs.get("tickers") or [None])[0]
+    else:
+        cik, us_ticker, subs = edgar_match(sec, company)
 
     today = date.today()
-    listing = list_filings(symbol, "{}-01-01".format((args.year or today.year) - 2),
-                           today.isoformat())
+    since = (args.year or today.year) - (2 if cik else args.years + 1)
+    listing = list_filings(symbol, "{}-01-01".format(since), today.isoformat())
     sets = annual_sets(listing)
     if not sets:
         raise SECError("no audited annual financial statements listed for {} on TMX Money "
-                       "since {}.".format(symbol, (args.year or today.year) - 2))
+                       "since {}.".format(symbol, since))
 
     def load(doc):
         return pdf_text(pdfs.get(doc["urlToPdf"], binary=True)) if doc else ("", [])
@@ -642,6 +745,10 @@ def run(args):
     for i, s in enumerate(sets):
         fs_text, fs_bold = load(s["fs"])
         period = fiscal_year_end(fs_text, s["fs"]["filingDate"])
+        if not period:
+            # An annual report opens with photographs, not dates (Loblaw). The
+            # statements inside it head every page with the year end.
+            period = (read_statements(pdfs, s["fs"]) or {}).get("period")
         if period and (not args.year or period[:4] == str(args.year)):
             chosen = i
             break
@@ -659,7 +766,7 @@ def run(args):
         print("Pass --refresh to re-download (and to re-price at a current quote).")
         return out_dir
 
-    print("{} — {} — annual filings for FY ended {}".format(folder, company, period))
+    print("{} — {} — annual filings for FY ended {}".format(ticker, company, period))
     print("  fetching documents from TMX Money...")
     aif_text, aif_bold = load(docs["aif"])
     mda_text, mda_bold = load(docs["mda"])
@@ -731,24 +838,31 @@ def run(args):
             print("  risk diff: {} added, {} removed, {} reworded".format(
                 len(diff["added"]), len(diff["removed"]), len(diff["reworded"])))
 
-    # Numbers: from EDGAR when the company files there, otherwise none.
-    cik, us_ticker, subs = args.cik, None, None
-    if cik:
-        subs = sec.submissions(cik)
-        us_ticker = (subs.get("tickers") or [None])[0]
-    else:
-        cik, us_ticker, subs = edgar_match(sec, company)
+    # Numbers: tagged, from EDGAR, when the company files there. Otherwise
+    # read off the statements it filed in Canada.
     stmts, auditor, accession, currency, facts = [], None, None, None, {"facts": {}}
+    data, source = None, None
     if cik:
         print("  on EDGAR as {} (CIK {}) — fetching tagged history...".format(subs["name"], cik))
         data, facts, stmts, auditor, accession, currency = numbers_from_edgar(
             sec, cik, subs, period, args.years, out_dir)
+        source = "edgar"
+    else:
+        print("  not on EDGAR — reading the numbers off the filed statements...")
+        got = numbers_from_sedar(pdfs, sets[chosen:], period, args.years, out_dir,
+                                 quote_tmx.get("currency") or "CAD")
+        if got:
+            data, facts, stmts, currency, parsed = got
+            source = "sedar"
+    if data is None:
+        print("  no statements could be read — documents only")
+        data = trends.build(facts, with_ttm=False)
+    tagged = bool(data["fiscal_year_ends"])
+    if tagged:
         print("  trends: {} fiscal years in {}, statements: {}".format(
             len(data["fiscal_year_ends"]), currency, ", ".join(s["name"] for s in stmts) or "none"))
     else:
-        print("  not on EDGAR — documents only, no tagged history")
-        data = trends.build(facts, with_ttm=False)
-    tagged = bool(data["fiscal_year_ends"])
+        source = None
     if not tagged:
         # One empty column for the year the documents cover, so everything
         # downstream (and the web page, which is built around a current year)
@@ -766,10 +880,18 @@ def run(args):
     write(out_dir / "xbrl_by_year.json", json.dumps({
         "fiscal_year_ends": fyes,
         "concepts": trends.tagged_by_year(facts["facts"].get("us-gaap", {}), fyes)}, indent=2))
+    note = "_All money figures in {}._\n\n".format(currency)
+    if source == "sedar":
+        note = ("_All money figures in {}. Read off the statements filed on SEDAR+, not XBRL: "
+                "where this says a line is \"not tagged\", no filed line matched it. "
+                "`statement_map.md` has the line and page behind each figure._\n\n".format(currency))
     if tagged:
-        note = "_All money figures in {}._\n\n".format(currency)
-        write(out_dir / "trends.md", note + trends.to_markdown(data, company))
-        write(out_dir / "model.csv", trends.to_csv(data, folder, company))
+        md = trends.to_markdown(data, company)
+        if source == "sedar":
+            md = md.replace("Source: SEC XBRL companyfacts (the company's own tagged numbers, as filed).",
+                            "Source: the audited statements filed on SEDAR+, read from the PDFs.")
+        write(out_dir / "trends.md", note + md)
+        write(out_dir / "model.csv", trends.to_csv(data, ticker, company))
 
     # Price. The quote has to be in the currency the statements are in, or the
     # multiples divide one currency by another: a CAD reporter is priced off
@@ -797,6 +919,17 @@ def run(args):
         quote = {"price": float(quote_tmx["price"]), "currency": quote_tmx.get("currency") or "CAD",
                  "as_of": datetime.now().isoformat(timespec="minutes"),
                  "source": "TMX Money quote — {}".format(symbol), "is_live": True}
+    # A TSX-only company that reports in US dollars (Constellation, NFI) has no
+    # US line to price it off. Convert the Toronto price at today's rate, and
+    # say so, rather than divide CAD by USD.
+    have, want = quote.get("currency"), currency
+    if quote.get("price") and have != want and {have, want} == {"CAD", "USD"}:
+        pair = "{}{}=X".format(have, want)
+        fx = valuation.live_quote(pair)
+        if fx.get("price"):
+            quote = dict(quote, price=quote["price"] * fx["price"], currency=want,
+                         source="{} — {:,.2f} {} converted at {:.4f} ({})".format(
+                             quote.get("source"), quote["price"], have, fx["price"], pair))
     tmx_shares = tmx_now  # today's count; no use to a historical run
     val = valuation.build(
         data["series"], data["derived"], fyes[-1], cover, awards or {}, quote,
@@ -814,13 +947,18 @@ def run(args):
     write(out_dir / "valuation.json", json.dumps(val, indent=2))
     if tagged:
         write(out_dir / "valuation.md", "_All money figures in {}._\n\n".format(currency)
-              + valuation.to_markdown(val, company, folder))
+              + valuation.to_markdown(val, company, ticker)
+              .replace("comes out of the 10-K", "comes out of the annual filings")
+              .replace("item8_financial_statements.md", "financial_statements.md"))
     print("    price: {} · market cap {}".format(
         "—" if not quote.get("price") else "{:,.2f} {}".format(quote["price"], quote.get("currency")),
         valuation._m(val["market_cap"])))
 
     meta = {
-        "ticker": folder,
+        "ticker": ticker,
+        "folder": folder,
+        "numbers_source": {"edgar": "XBRL filed with the SEC",
+                           "sedar": "statements filed on SEDAR+, read from the PDF"}.get(source),
         # The page prints a bare $, so the currency rides along in the name.
         "company": "{} — figures in {}".format(company, currency) if currency else company,
         "cik": cik,
@@ -842,7 +980,7 @@ def run(args):
     write(out_dir / "metadata.json", json.dumps(meta, indent=2))
     write(out_dir / "SUMMARY.md", summary_markdown(
         dict(meta, company=company), docs, written, summaries, data, val, risk_heads,
-        risk_from, diff, [s["name"] for s in stmts], tagged))
+        risk_from, diff, [s["name"] for s in stmts], source))
 
     print("\nDone: {}".format(out_dir))
     print("Start with SUMMARY.md. SEC requests: {}, cache hits: {}".format(
@@ -852,7 +990,7 @@ def run(args):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("ticker", help="TSX ticker with .TO, e.g. RY.TO, DOL.TO, GIB.A.TO")
+    p.add_argument("ticker", help="TSX ticker: DOL, TSX:DOL or DOL.TO; share classes GIB.A")
     p.add_argument("--year", type=int, help="fiscal year to pull instead of the latest")
     p.add_argument("--cik", type=int, help="link to this SEC filer for the tagged numbers, "
                                            "when the name match misses it")
@@ -872,11 +1010,14 @@ def main():
 
 def demo():
     """python3 extract_tsx.py --self-check — offline, nothing touches the network."""
-    assert parse_ticker("ry.to") == ("RY-TO", "RY", "RY.TO")
-    assert parse_ticker("GIB.A.TO") == ("GIB-A-TO", "GIB.A", "GIB-A.TO")
+    for way in ("ry.to", "RY", "TSX:RY", "tsx:ry", "RY-TO", "RY:CA"):
+        assert parse_ticker(way) == ("RY-TO", "RY", "RY.TO"), way
+    for way in ("GIB.A.TO", "GIB.A", "TSX:GIB.A", "GIB-A"):
+        assert parse_ticker(way) == ("GIB-A-TO", "GIB.A", "GIB-A.TO"), way
+    assert display_ticker("GIB-A-TO") == "TSX:GIB.A" and display_ticker("L-TO") == "TSX:L"
     try:
-        parse_ticker("AAPL")
-        raise AssertionError("AAPL is not a TSX ticker")
+        parse_ticker("../etc")
+        raise AssertionError("a path is not a ticker")
     except SECError:
         pass
 

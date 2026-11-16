@@ -44,7 +44,7 @@ STOCK_KEYS = set(trends.INSTANT_CONCEPTS)
 # a browser connection forever if SEC stalls.
 EXTRACT_TIMEOUT = 180
 
-TICKER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9.\-]{0,9}$")
+TICKER_RE = re.compile(r"^(?:TS[XE]:)?[A-Za-z][A-Za-z0-9.\-]{0,12}$", re.I)
 
 # One extraction at a time. SEC asks for =<10 req/s and the client already
 # paces itself; letting a page-refresh spawn parallel runs would blow past that
@@ -675,9 +675,25 @@ def load_filing(out_dir):
     }
 
 
+def folder_of(ticker):
+    """Where a ticker's filings live. A TSX company is typed TSX:DOL, DOL.TO or
+    plain DOL, and all three are filings/DOL-TO — the -TO keeps Loblaw (TSX:L)
+    out of Loews's folder (L). A bare DOL that has never been extracted maps
+    to a folder that isn't there, and the extractor's router sorts it out."""
+    t = ticker.upper()
+    if re.match(r"^TS[XE]:", t):
+        t = t[4:] + "-TO"
+    return t.replace(".", "-")
+
+
+def shown_as(folder):
+    """filings/GIB-A-TO -> TSX:GIB.A, the name the page prints and sends back."""
+    return "TSX:" + folder[:-3].replace("-", ".") if folder.endswith("-TO") else folder
+
+
 def periods(ticker):
     """Every fiscal year end already extracted for a ticker, oldest first."""
-    base = FILINGS / ticker.upper().replace(".", "-")
+    base = FILINGS / folder_of(ticker)
     if not base.is_dir():
         return []
     return sorted(p.name for p in base.iterdir() if p.is_dir())
@@ -688,12 +704,12 @@ def newest_dir(ticker):
     found = periods(ticker)
     if not found:
         return None
-    return FILINGS / ticker.upper().replace(".", "-") / found[-1]
+    return FILINGS / folder_of(ticker) / found[-1]
 
 
 def year_dir(ticker, year):
     """The extracted filing for one fiscal year, if it is already on disk."""
-    base = FILINGS / ticker.upper().replace(".", "-")
+    base = FILINGS / folder_of(ticker)
     match = [p for p in periods(ticker) if p[:4] == str(year)]
     return (base / match[-1]) if match else None
 
@@ -706,12 +722,10 @@ def run_extractor(ticker, year=None, rebuild=False):
     extraction written before a schema change is brought up to date without
     asking SEC for anything it has already answered.
     """
-    # A .TO ticker is a TSX issuer: no 10-K exists, so a different script pulls
-    # its AIF, MD&A and statements and writes the same output files.
-    # "-TO" too: that is how the folder is named, so it is what a cached-ticker
-    # chip on the page sends back.
-    script = "extract_tsx.py" if re.search(r"[.-]TO$", ticker.upper()) else "extract_10k.py"
-    cmd = [sys.executable, script, ticker]
+    # route.py picks the script: a 10-K filer goes to extract_10k.py, a TSX
+    # issuer (no 10-K exists) to extract_tsx.py, which pulls its AIF, MD&A and
+    # statements and writes the same output files.
+    cmd = [sys.executable, "route.py", ticker]
     if year:
         cmd += ["--year", str(year)]
     if rebuild:
@@ -813,7 +827,7 @@ class Handler(SimpleHTTPRequestHandler):
                         # Every period, not only the newest: COST has three on
                         # disk and the list used to admit to one, so the two
                         # older ones were unreachable from the page.
-                        out.append({"ticker": t, "period": found[-1], "periods": found})
+                        out.append({"ticker": shown_as(t), "period": found[-1], "periods": found})
             return self.send_json({"cached": out})
 
         # the extracted filings themselves, so the file list is clickable
@@ -869,7 +883,8 @@ class Handler(SimpleHTTPRequestHandler):
         ticker = str(payload.get("ticker", "")).strip().upper()
         if not TICKER_RE.match(ticker):
             return self.send_json(
-                {"error": "That doesn't look like a ticker. Try AAPL, BRK.B, JPM — or RY.TO for the TSX."}, 400)
+                {"error": "That doesn't look like a ticker. Try AAPL, BRK.B, JPM — or a TSX "
+                          "one like DOL or RY (TSX:L when a US ticker has the same letters)."}, 400)
 
         year = payload.get("year")
         if year not in (None, "", 0):
